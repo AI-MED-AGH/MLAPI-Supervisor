@@ -9,11 +9,11 @@ def test_error_observers(engine):
         .where(Event.name == "error")
     )
     with Session(engine) as session:
-        query_result = ""
-        results = session.execute(stmt).scalars().all()
+        query_result = set()
+        results = set(session.execute(stmt).scalars().all())
         for url in results:
-            query_result += f"{url}"
-        assert(query_result == "https://cool.service/webhook")
+            query_result.add(url)
+        assert query_result == {"https://cool.service/webhook"}
 
 def test_freeze_observers(engine):
     stmt = (
@@ -22,11 +22,11 @@ def test_freeze_observers(engine):
         .where(Event.name == "freeze")
     )
     with Session(engine) as session:
-        query_result = ""
-        results = session.execute(stmt).scalars().all()
+        query_result = set()
+        results = set(session.execute(stmt).scalars().all())
         for url in results:
-            query_result += f"{url}"
-        assert(query_result == "https://cool.service/webhookhttps://ilikefreeze.com/freeze")
+            query_result.add(url) 
+        assert query_result == {"https://cool.service/webhook", "https://ilikefreeze.com/freeze"}
 
 def test_all_observer(engine):
     stmt = (
@@ -35,11 +35,11 @@ def test_all_observer(engine):
         .where(Observer.webhook_url == "https://cool.service/webhook")
     )
     with Session(engine) as session:
-        query_result = ""
+        query_result = set()
         results = session.execute(stmt).scalars().all()
         for url in results:
-            query_result += f"{url}"
-        assert(query_result == "errorfreeze")
+            query_result.add(url)
+        assert query_result == {"error","freeze"}
 
 def insert_test_records(engine):
     with Session(engine) as session:
@@ -73,8 +73,6 @@ def test_append():
     test_error_observers(engine) 
     test_freeze_observers(engine)
     test_all_observer(engine)
-
-        
 
 
 def test():

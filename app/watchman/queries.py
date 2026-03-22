@@ -28,8 +28,8 @@ def events_exist(session, events:List[str])->bool:
 
     events_set = set(events)
     if events_set.issubset(existing_events): 
-         return False
-    return True
+         return True 
+    return False
     
 
 def insert_new_subscription(session: Session, subscribtion:SubscriptionSchema)->None:
