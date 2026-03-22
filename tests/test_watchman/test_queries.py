@@ -1,6 +1,5 @@
 from re import I
-from app.watchman import Observer, Subscribtion, Event, Base, events_exist
-from app.watchman.queries import insert_new_subscription, insert_new_subscription, get_webhooks_subscribed_to_event
+from app.watchman import Observer, Subscribtion, Event, Base, events_exist, insert_new_subscription
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 

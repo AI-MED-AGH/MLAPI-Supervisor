@@ -1,8 +1,8 @@
 from typing import Sequence, List
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
-from app.watchman import Event, Observer
-from .schemas import SubscriptionSchema
+from app.watchman.tables import Event, Observer
+from app.watchman.schemas import SubscriptionSchema
 
 
 def get_webhooks_subscribed_to_event(session: Session, event_name:str)->Sequence[Observer]:
