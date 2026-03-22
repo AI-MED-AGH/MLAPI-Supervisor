@@ -12,7 +12,11 @@ class Observer(Base):
     id:Mapped[int] = mapped_column(primary_key=True) 
     webhook_url:Mapped[str]
 
-    events: Mapped[List["Event"]] = relationship(secondary="subscriptions", back_populates="observers")
+    events: Mapped[List["Event"]] = relationship(
+            secondary="subscriptions", 
+            back_populates="observers",
+            cascade="all, delete",
+        )
 
     def __repr__(self)->str:
         return f"Observer(id={self.id!r}, webhook_url={self.webhook_url!r})"
@@ -23,7 +27,11 @@ class Event(Base):
     id:Mapped[int] = mapped_column(primary_key=True)
     name:Mapped[str]
 
-    observers: Mapped[List["Observer"]] = relationship(secondary="subscriptions",back_populates="events")
+    observers: Mapped[List["Observer"]] = relationship(
+            secondary="subscriptions",
+            back_populates="events",
+            cascade="all, delete",
+         )
     
     def __repr__(self)->str:
         return f"Event(id={self.id!r}, name={self.name!r})"
