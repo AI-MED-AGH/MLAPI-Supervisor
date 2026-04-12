@@ -4,9 +4,7 @@ from dotenv import load_dotenv
 import os
 
 load_dotenv()
-DATABASE_URL = os.getenv("DATABASE_URL")
-if DATABASE_URL is None:
-    raise ValueError("There is no DATABASE_URL")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///:memory:")
 
 engine = create_engine(DATABASE_URL, pool_recycle=180, pool_pre_ping=True, pool_size=5)
  
