@@ -17,4 +17,4 @@ def root() -> dict[str, str]:
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
-app.include_router(watchmanRouter, prefix="/register")
+app.include_router(watchmanRouter, prefix="/observers")

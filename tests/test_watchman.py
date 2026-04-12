@@ -49,33 +49,33 @@ def client(get_test_session):
     app.dependency_overrides.clear()
 
 def test_subscribe(client):
-    response = client.post("/register/", json={"webhook_url":"0.0.0.0:8000", "wrong":["error"]}) 
+    response = client.post("/observers/", json={"webhook_url":"0.0.0.0:8000", "wrong":["error"]}) 
     assert response.status_code == 422
 
-    response = client.post("/register/", json={"webhook_url":"0.0.0.0:8000", "event_types":["wrong_event"]}) 
+    response = client.post("/observers/", json={"webhook_url":"0.0.0.0:8000", "event_types":[]})
     assert response.status_code == 404
 
-    response = client.post("/register/", json={"webhook_url":"0.0.0.0:8000", "event_types":["error"]}) 
+    response = client.post("/observers/", json={"webhook_url":"0.0.0.0:8000", "event_types":["error"]}) 
     assert response.status_code == 201
 
 def test_insert_subscription(client, get_test_session):
-    response = client.post("/register/", json={"webhook_url":"0.0.0.0:8000", "event_types":["error"]}) 
+    response = client.post("/observers/", json={"webhook_url":"0.0.0.0:8000", "event_types":["error"]}) 
     assert response.status_code == 201
     observers = get_observers_subscribed_to_event(get_test_session, "error")
     assert str(observers) == "[Observer(id=1, webhook_url='0.0.0.0:8000')]"
 
-    response = client.post("/register/", json={"webhook_url":"0.0.0.0:8001", "event_types":["error"]}) 
+    response = client.post("/observers/", json={"webhook_url":"0.0.0.0:8001", "event_types":["error"]}) 
     assert response.status_code == 201
     observers = get_observers_subscribed_to_event(get_test_session, "error")
     assert str(observers) == "[Observer(id=1, webhook_url='0.0.0.0:8000'), Observer(id=2, webhook_url='0.0.0.0:8001')]"
     
 def test_notify_subscribers(client, get_test_session):
-    response = client.post("/register/", json={"webhook_url":"0.0.0.0:8000", "event_types":["error"]}) 
+    response = client.post("/observers/", json={"webhook_url":"0.0.0.0:8000", "event_types":["error"]}) 
     assert response.status_code == 201
     observers = get_observers_subscribed_to_event(get_test_session, "error")
     assert str(observers) == "[Observer(id=1, webhook_url='0.0.0.0:8000')]"
 
-    response = client.post("/register/", json={"webhook_url":"0.0.0.0:8001", "event_types":["error"]}) 
+    response = client.post("/observers/", json={"webhook_url":"0.0.0.0:8001", "event_types":["error"]}) 
     assert response.status_code == 201
     observers = get_observers_subscribed_to_event(get_test_session, "error")
     assert str(observers) == "[Observer(id=1, webhook_url='0.0.0.0:8000'), Observer(id=2, webhook_url='0.0.0.0:8001')]"
@@ -165,4 +165,36 @@ def test_notify_error(mock_post,get_test_session):
     observers = get_observers_subscribed_to_event(get_test_session, "error")
     assert str(observers) == "[Observer(id=1, webhook_url='0.0.0.0:8000')]"
 
+@patch("httpx.Client.post")
+def test_many_subs(mock_post, get_test_session):
+    insert_new_subscription(get_test_session, SubscriptionSchema(webhook_url="0.0.0.0:8000", event_types=["error", "freeze"]))
+    insert_new_subscription(get_test_session, SubscriptionSchema(webhook_url="0.0.0.0:8001", event_types=["error"]))
+    insert_new_subscription(get_test_session, SubscriptionSchema(webhook_url="0.0.0.0:8002", event_types=["freeze"]))
+    insert_new_subscription(get_test_session, SubscriptionSchema(webhook_url="0.0.0.0:8003", event_types=["error"]))
+    error_observers = get_observers_subscribed_to_event(get_test_session, "error")
+    assert str(error_observers) == "[Observer(id=1, webhook_url='0.0.0.0:8000'), Observer(id=2, webhook_url='0.0.0.0:8001'), Observer(id=4, webhook_url='0.0.0.0:8003')]"
+    freeze_observers = get_observers_subscribed_to_event(get_test_session, "freeze")
+    assert str(freeze_observers) == "[Observer(id=1, webhook_url='0.0.0.0:8000'), Observer(id=3, webhook_url='0.0.0.0:8002')]"
 
+    success_response = MagicMock()
+    success_response.raise_for_status.return_value = None 
+
+    error_response = MagicMock()
+    error_response.raise_for_status.side_effect = httpx.ConnectError("Server Error")
+
+    mock_post.side_effect = [error_response, success_response, success_response, error_response, success_response] 
+    service = NotificationService(connection_error_max=1)
+    service.notify(get_test_session, "error", {"msg":"test"})
+
+    calls = [call("0.0.0.0:8000", json={"msg": "test"}, timeout=service.timeout),call("0.0.0.0:8001", json={"msg": "test"}, timeout=service.timeout), call("0.0.0.0:8003", json={"msg": "test"}, timeout=service.timeout)]
+    mock_post.assert_has_calls(calls)
+    error_observers = get_observers_subscribed_to_event(get_test_session, "error")
+    assert str(error_observers) == "[Observer(id=1, webhook_url='0.0.0.0:8000'), Observer(id=2, webhook_url='0.0.0.0:8001'), Observer(id=4, webhook_url='0.0.0.0:8003')]"
+
+    service.notify(get_test_session, "freeze", {"msg":"test"})
+
+    calls = [call("0.0.0.0:8000", json={"msg": "test"}, timeout=service.timeout),call("0.0.0.0:8002", json={"msg": "test"}, timeout=service.timeout)] 
+    mock_post.assert_has_calls(calls)
+    freeze_observers = get_observers_subscribed_to_event(get_test_session, "freeze")
+    assert str(freeze_observers) == "[Observer(id=3, webhook_url='0.0.0.0:8002')]"
+    
