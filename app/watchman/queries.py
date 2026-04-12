@@ -1,4 +1,6 @@
 from typing import Sequence, List
+from fastapi.exceptions import HTTPException 
+from fastapi import status
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 from app.watchman.tables import Event, Observer
@@ -43,16 +45,20 @@ def insert_new_subscription(session: Session, subscribtion:SubscriptionSchema)->
                 .where(Event.name.in_(subscribtion.event_types))
             )
      
-    events = session.scalars(get_events_query).all()
-    observer = session.scalar(get_observer_query)
-    if observer is None:
-        observer = Observer(webhook_url=subscribtion.webhook_url)
-        observer.events.extend(events) 
-        session.add(observer)
-    else:
-        old_events = set(observer.events)
-        new_events = [event for event in events if event not in old_events]
-        observer.events.extend(new_events)
+    try:
+        events = session.scalars(get_events_query).all()
+        observer = session.scalar(get_observer_query)
+        if observer is None:
+            observer = Observer(webhook_url=subscribtion.webhook_url)
+            observer.events.extend(events) 
+            session.add(observer)
+        else:
+            old_events = set(observer.events)
+            new_events = [event for event in events if event not in old_events]
+            observer.events.extend(new_events)
 
-    session.commit()
-
+        session.commit()
+        session.refresh(observer)
+    except Exception:
+        session.rollback()
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error occured while subscribing")

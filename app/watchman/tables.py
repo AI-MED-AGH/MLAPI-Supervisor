@@ -36,7 +36,7 @@ class Event(Base):
     def __repr__(self)->str:
         return f"Event(id={self.id!r}, name={self.name!r})"
 
-class Subscribtion(Base):
+class Subscription(Base):
     __tablename__ = "subscriptions"
 
     id:Mapped[int] = mapped_column(primary_key=True)
@@ -45,4 +45,4 @@ class Subscribtion(Base):
 
 
     def __repr__(self)->str:
-        return f"Subscribtion(id={self.id!r}, observer_id={self.observer_id!r}, event_id={self.event_id!r})"
+        return f"Subscription(id={self.id!r}, observer_id={self.observer_id!r}, event_id={self.event_id!r})"

@@ -10,5 +10,5 @@ watchmanRouter = APIRouter()
 @watchmanRouter.post("/", status_code=status.HTTP_201_CREATED)
 def subscribe(subscription: SubscriptionSchema, session:Session = Depends(get_session)):
     if not events_exist(session, subscription.event_types):
-        raise HTTPException(status_code=404, detail="Event doesn't exist")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Event doesn't exist")
     insert_new_subscription(session, subscription) 

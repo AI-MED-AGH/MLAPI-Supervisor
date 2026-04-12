@@ -1,10 +1,15 @@
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
+from dotenv import load_dotenv
+import os
 
-DATABASE_URL = "sqlite:///:memory:"
+load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL is None:
+    raise ValueError("There is no DATABASE_URL")
 
-engine = create_engine(DATABASE_URL)
-
+engine = create_engine(DATABASE_URL, pool_recycle=180, pool_pre_ping=True, pool_size=5)
+ 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 def get_session():
