@@ -5,7 +5,7 @@ from app.watchman.tables import Event, Observer
 from app.watchman.schemas import SubscriptionSchema
 
 
-def get_webhooks_subscribed_to_event(session: Session, event_name:str)->Sequence[Observer]:
+def get_observers_subscribed_to_event(session: Session, event_name:str)->Sequence[Observer]:
     """get all Observers subscribed to a given event"""
     query:Select = (
             select(Observer)
@@ -14,8 +14,8 @@ def get_webhooks_subscribed_to_event(session: Session, event_name:str)->Sequence
         )
     return session.scalars(query).all()
     
-def events_exist(session, events:List[str])->bool:
-    """Checks if all events client wants to subscribe to even exist"""
+def events_exist(session:Session, events:List[str])->bool:
+    """Checks if all events client wants to subscribe to exist"""
     if len(events) == 0:
         return False
 

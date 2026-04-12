@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from app.watchman import watchmanRouter
 
 app = FastAPI(
     title="MLAPI Supervisor",
@@ -15,3 +16,5 @@ def root() -> dict[str, str]:
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+app.include_router(watchmanRouter, prefix="/register")

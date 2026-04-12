@@ -11,11 +11,11 @@ class Observer(Base):
    
     id:Mapped[int] = mapped_column(primary_key=True) 
     webhook_url:Mapped[str]
+    connection_errors_count:Mapped[int] = mapped_column(default=0)
 
     events: Mapped[List["Event"]] = relationship(
             secondary="subscriptions", 
             back_populates="observers",
-            cascade="all, delete",
         )
 
     def __repr__(self)->str:
