@@ -1,10 +1,17 @@
 from fastapi import FastAPI
-from app.watchman import watchmanRouter
+from app.watchman import watchmanRouter, engine, Base
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    yield
 
 app = FastAPI(
     title="MLAPI Supervisor",
     description="Supervisor controlling ML model instances",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 

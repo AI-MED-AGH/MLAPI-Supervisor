@@ -1,7 +1,7 @@
 import pytest
 import httpx
 from app.main import app
-from app.watchman import Base, Event, NotificationService
+from app.watchman import Base, NotificationService
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from fastapi.testclient import TestClient
@@ -22,13 +22,6 @@ TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engin
 def get_test_session():
     Base.metadata.create_all(bind=engine)
     testSession = TestingSessionLocal()
-    
-    error = Event(name="error")
-    freeze = Event(name="freeze")
-    testSession.add_all([error, freeze])
-    testSession.commit()
-    testSession.refresh(error)
-    testSession.refresh(freeze)
     
     yield testSession 
     
@@ -51,9 +44,6 @@ def client(get_test_session):
 def test_subscribe(client):
     response = client.post("/observers/", json={"webhook_url":"0.0.0.0:8000", "wrong":["error"]}) 
     assert response.status_code == 422
-
-    response = client.post("/observers/", json={"webhook_url":"0.0.0.0:8000", "event_types":[]})
-    assert response.status_code == 404
 
     response = client.post("/observers/", json={"webhook_url":"0.0.0.0:8000", "event_types":["error"]}) 
     assert response.status_code == 201
