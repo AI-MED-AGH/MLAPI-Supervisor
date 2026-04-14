@@ -1,27 +1,39 @@
 from typing import Sequence
-from sqlalchemy import Select, select
-from sqlalchemy.orm import Session
+from sqlalchemy import Select, select 
+from sqlalchemy.ext.asyncio import AsyncSession
 from app.watchman.tables import Observer, Subscription
 from app.watchman.schemas import SubscriptionSchema
+from sqlalchemy.orm import selectinload
+import logging
 
-def get_observers_subscribed_to_event(session: Session, event_name:str)->Sequence[Observer]:
+logger = logging.getLogger(__name__)
+
+async def delete_observers(session:AsyncSession, observers:list[Observer])->None:
+    """Deletes observers specified in an observers list"""
+    for observer in observers:
+        print(f"deleting{observer}")
+        await session.delete(observer)
+    
+
+async def get_observers_subscribed_to_event(session: AsyncSession, event_name:str)->Sequence[Observer]:
     """get all Observers subscribed to a given event"""
     query:Select = (
             select(Observer)
             .join(Subscription)
             .where(Subscription.event_type == event_name)
         )
-    return session.scalars(query).all()
+    return (await session.scalars(query)).all()
     
 
-def insert_new_subscription(session: Session, subscribtion:SubscriptionSchema)->None:
+async def insert_new_subscription(session: AsyncSession, subscribtion:SubscriptionSchema)->None:
     """Inserts new subscription"""
     get_observer_query:Select = (
                 select(Observer)
                 .where(Observer.webhook_url == subscribtion.webhook_url)
+                .options(selectinload(Observer.subscriptions))
             )
      
-    observer = session.scalar(get_observer_query)
+    observer = await session.scalar(get_observer_query)
 
     if observer is None:
         observer = Observer(webhook_url=subscribtion.webhook_url)
@@ -34,5 +46,5 @@ def insert_new_subscription(session: Session, subscribtion:SubscriptionSchema)->
         for event_type in new_event_types:
             observer.subscriptions.append(Subscription(event_type=event_type))
 
-    session.commit()
-    session.refresh(observer)
+    await session.commit()
+    await session.refresh(observer)

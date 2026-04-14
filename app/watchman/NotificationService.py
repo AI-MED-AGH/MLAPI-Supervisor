@@ -1,7 +1,8 @@
-from app.watchman.queries import get_observers_subscribed_to_event
-from sqlalchemy.orm import Session
+from app.watchman.queries import get_observers_subscribed_to_event, delete_observers
+from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -15,24 +16,27 @@ class NotificationService:
         self.timeout = timeout
         self.connection_error_max = connection_error_max
 
-    def notify(self,session:Session, event:str, payload:dict)->None:
+    async def notify(self,session:AsyncSession, event:str, payload:dict)->None:
         """Sends payload to observers subscribed to an event"""
-        observers = get_observers_subscribed_to_event(session, event)
+        observers = await get_observers_subscribed_to_event(session, event)
+        observers_subscribed = list()
         observers_to_delete = list()
-        with httpx.Client() as client:
+        async with httpx.AsyncClient() as client:
+            notifications = list()
             for observer in observers:
-                try:
-                    response = client.post(observer.webhook_url, json=payload, timeout=self.timeout)
-                    response.raise_for_status()
-                except Exception as e:
-                    logger.error(f"\n Observers webhook: {observer.webhook_url} failed with error: {e}")
+                notification = client.post(observer.webhook_url, json=payload, timeout=self.timeout)
+                notifications.append(notification)
+                observers_subscribed.append(observer)
+
+            results = await asyncio.gather(*notifications, return_exceptions=True)
+            for result, observer in zip(results, observers_subscribed):
+                if isinstance(result, Exception):
                     observer.connection_errors_count+=1
                     if observer.connection_errors_count > self.connection_error_max:
                         observers_to_delete.append(observer)
                 else:
                     observer.connection_errors_count = 0
-                    
-        for observer in observers_to_delete:
-            logger.info(f"\n deleted observer {repr(observer)} failed {observer.connection_errors_count} times")
-            session.delete(observer)
-        session.commit()
+                                           
+        await delete_observers(session, observers_to_delete)
+
+        await session.commit()
