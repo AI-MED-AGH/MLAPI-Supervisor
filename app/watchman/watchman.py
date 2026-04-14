@@ -14,6 +14,7 @@ watchmanRouter = APIRouter()
 async def subscribe(subscription: SubscriptionSchema, session:AsyncSession = Depends(get_session)):
     try:
         await insert_new_subscription(session, subscription) 
+        await session.commit()
     except Exception:
         await session.rollback()
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error occured while subscribing")

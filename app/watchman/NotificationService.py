@@ -37,6 +37,10 @@ class NotificationService:
                 else:
                     observer.connection_errors_count = 0
                                            
-        await delete_observers(session, observers_to_delete)
-
-        await session.commit()
+        try:
+            await delete_observers(session, observers_to_delete)
+            await session.commit()
+        except Exception:
+           await session.rollback()
+        else:
+            logger.info(f"deleted observers: {observers_to_delete}")

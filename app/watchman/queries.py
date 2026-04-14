@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 async def delete_observers(session:AsyncSession, observers:list[Observer])->None:
     """Deletes observers specified in an observers list"""
     for observer in observers:
-        print(f"deleting{observer}")
         await session.delete(observer)
     
 
@@ -47,4 +46,4 @@ async def insert_new_subscription(session: AsyncSession, subscribtion:Subscripti
             observer.subscriptions.append(Subscription(event_type=event_type))
 
     await session.commit()
-    await session.refresh(observer)
+
