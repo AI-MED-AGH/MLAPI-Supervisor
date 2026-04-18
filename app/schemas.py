@@ -82,6 +82,18 @@ class ModelDeploymentResponse(BaseModel):
     message: str
 
 
+class ProjectPullRequest(BaseModel):
+    tag: str | None = Field(default=None, description="Optional tag override; otherwise uses project default or GHCR latest.")
+
+    @field_validator("tag")
+    @classmethod
+    def validate_tag(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
 class ModelDeleteResponse(BaseModel):
     model_id: str
     deleted: bool

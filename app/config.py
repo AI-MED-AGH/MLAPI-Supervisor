@@ -20,6 +20,9 @@ class Settings(BaseModel):
     default_container_port: int = Field(default=8000, ge=1, le=65535)
     default_service_port: int = Field(default=80, ge=1, le=65535)
     poll_state_file: str = "/tmp/mlapi-supervisor-state.json"
+    rollout_timeout_seconds: float = Field(default=180.0, ge=1.0)
+    rollout_poll_interval_seconds: float = Field(default=2.0, ge=0.1)
+    deploy_max_attempts: int = Field(default=3, ge=1, le=10)
 
     @field_validator("watched_images", mode="before")
     @classmethod
@@ -51,6 +54,13 @@ class Settings(BaseModel):
             "poll_state_file": os.getenv(
                 "ML_SUPERVISOR_POLL_STATE_FILE", "/tmp/mlapi-supervisor-state.json"
             ),
+            "rollout_timeout_seconds": os.getenv(
+                "ML_SUPERVISOR_ROLLOUT_TIMEOUT_SECONDS", "180"
+            ),
+            "rollout_poll_interval_seconds": os.getenv(
+                "ML_SUPERVISOR_ROLLOUT_POLL_INTERVAL_SECONDS", "2"
+            ),
+            "deploy_max_attempts": os.getenv("ML_SUPERVISOR_DEPLOY_MAX_ATTEMPTS", "3"),
         }
 
         for key in ("ghcr_username", "ghcr_token"):

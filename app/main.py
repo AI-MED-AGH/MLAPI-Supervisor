@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import threading
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from kubernetes.client.rest import ApiException
@@ -16,10 +15,22 @@ from app.schemas import (
     ModelListItem,
     ModelListResponse,
     ModelStatusResponse,
+    ProjectPullRequest,
     build_image_reference,
     normalize_model_id,
 )
-from app.services import DeploymentSpec, GHCRService, KubernetesService, StateStore
+from app.services import (
+    DeployFailure,
+    DeployRequest,
+    DeployWorkflow,
+    GHCRService,
+    InMemoryProjectRegistry,
+    KubernetesService,
+    ModelLockManager,
+    Project,
+    ProjectRegistry,
+    StateStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +54,20 @@ def get_ghcr_service(request: Request) -> GHCRService:
     if service is None:
         raise HTTPException(status_code=503, detail="GHCR service is not initialized")
     return service
+
+
+def get_project_registry(request: Request) -> ProjectRegistry:
+    registry = getattr(request.app.state, "project_registry", None)
+    if registry is None:
+        raise HTTPException(status_code=503, detail="Project registry is not initialized")
+    return registry
+
+
+def get_deploy_workflow(request: Request) -> DeployWorkflow:
+    workflow = getattr(request.app.state, "deploy_workflow", None)
+    if workflow is None:
+        raise HTTPException(status_code=503, detail="Deploy workflow is not initialized")
+    return workflow
 
 
 def _image_owner(image: str, registry: str) -> str | None:
@@ -88,8 +113,7 @@ def _deploy_model(
     *,
     request: ModelDeploymentRequest,
     settings: Settings,
-    kubernetes_service: KubernetesService,
-    state_store: StateStore,
+    workflow: DeployWorkflow,
 ) -> ModelDeploymentResponse:
     model_id = normalize_model_id(request.model_id)
     image_reference = build_image_reference(
@@ -98,30 +122,21 @@ def _deploy_model(
         registry=settings.ghcr_registry,
     )
 
-    if settings.ghcr_token:
-        username = settings.ghcr_username or _image_owner(request.image, settings.ghcr_registry)
-        if username:
-            kubernetes_service.ensure_registry_pull_secret(
-                username=username,
-                token=settings.ghcr_token,
-                registry=settings.ghcr_registry,
-            )
-        else:
-            logger.warning(
-                "Skipping pull secret refresh for model '%s' because GHCR username could not be inferred",
-                model_id,
-            )
-
-    deployment_spec = DeploymentSpec(
+    ghcr_username = settings.ghcr_username or _image_owner(request.image, settings.ghcr_registry)
+    deploy_request = DeployRequest(
         model_id=model_id,
-        image=image_reference,
+        image=request.image,
+        tag=request.tag,
+        image_reference=image_reference,
         replicas=request.replicas,
         container_port=request.container_port or settings.default_container_port,
         service_port=request.service_port or settings.default_service_port,
-        env=request.env,
+        env=dict(request.env),
+        ghcr_username=ghcr_username,
+        ghcr_token=settings.ghcr_token,
     )
-    deployment_status = kubernetes_service.upsert_model(deployment_spec)
-    state_store.set_model(model_id=model_id, image=request.image, tag=request.tag)
+
+    deployment_status = workflow.run(deploy_request)
 
     return ModelDeploymentResponse(
         model_id=model_id,
@@ -135,14 +150,59 @@ def _deploy_model(
     )
 
 
+def _deploy_from_project(
+    *,
+    project: Project,
+    tag_override: str | None,
+    settings: Settings,
+    ghcr_service: GHCRService,
+    workflow: DeployWorkflow,
+) -> ModelDeploymentResponse:
+    tag = tag_override or project.default_tag or "latest"
+    if tag.lower() == "latest":
+        resolved = ghcr_service.get_latest_tag(project.image)
+        if resolved:
+            tag = resolved
+
+    model_id = normalize_model_id(project.project_id)
+    image_reference = build_image_reference(
+        image=project.image, tag=tag, registry=settings.ghcr_registry
+    )
+
+    deploy_request = DeployRequest(
+        model_id=model_id,
+        image=project.image,
+        tag=tag,
+        image_reference=image_reference,
+        replicas=project.replicas,
+        container_port=project.container_port or settings.default_container_port,
+        service_port=project.service_port or settings.default_service_port,
+        env=dict(project.env),
+        ghcr_username=project.ghcr_username,
+        ghcr_token=project.ghcr_token,
+    )
+
+    deployment_status = workflow.run(deploy_request)
+
+    return ModelDeploymentResponse(
+        model_id=model_id,
+        deployment_name=deployment_status["deployment_name"],
+        service_name=deployment_status["service_name"],
+        image=image_reference,
+        namespace=deployment_status["namespace"],
+        service_type=deployment_status["service_type"],
+        external_endpoints=deployment_status["external_endpoints"],
+        message=f"Project '{project.project_id}' deployed at tag '{tag}'",
+    )
+
+
 def _poll_for_single_image(
     *,
     image: str,
     settings: Settings,
     ghcr_service: GHCRService,
-    kubernetes_service: KubernetesService,
+    workflow: DeployWorkflow,
     state_store: StateStore,
-    deploy_lock: threading.Lock,
 ) -> None:
     model_id = _derive_model_id_from_image(image)
     latest_tag = ghcr_service.get_latest_tag(image)
@@ -153,36 +213,29 @@ def _poll_for_single_image(
     if previous_tag == latest_tag:
         return
 
-    with deploy_lock:
-        request = ModelDeploymentRequest(
-            model_id=model_id,
-            image=image,
-            tag=latest_tag,
-            replicas=1,
-            container_port=settings.default_container_port,
-            service_port=settings.default_service_port,
-            env={},
-        )
-        _deploy_model(
-            request=request,
-            settings=settings,
-            kubernetes_service=kubernetes_service,
-            state_store=state_store,
-        )
-        logger.info(
-            "Updated model '%s' from tag '%s' to '%s' based on GHCR polling",
-            model_id,
-            previous_tag,
-            latest_tag,
-        )
+    request = ModelDeploymentRequest(
+        model_id=model_id,
+        image=image,
+        tag=latest_tag,
+        replicas=1,
+        container_port=settings.default_container_port,
+        service_port=settings.default_service_port,
+        env={},
+    )
+    _deploy_model(request=request, settings=settings, workflow=workflow)
+    logger.info(
+        "poll.updated model_id=%s from_tag=%s to_tag=%s",
+        model_id,
+        previous_tag,
+        latest_tag,
+    )
 
 
 async def _poll_watched_images(app: FastAPI) -> None:
     settings: Settings = app.state.settings
     ghcr_service: GHCRService = app.state.ghcr_service
-    kubernetes_service: KubernetesService = app.state.kubernetes_service
+    workflow: DeployWorkflow = app.state.deploy_workflow
     state_store: StateStore = app.state.state_store
-    deploy_lock: threading.Lock = app.state.deploy_lock
 
     while True:
         for image in settings.watched_images:
@@ -192,12 +245,11 @@ async def _poll_watched_images(app: FastAPI) -> None:
                     image=image,
                     settings=settings,
                     ghcr_service=ghcr_service,
-                    kubernetes_service=kubernetes_service,
+                    workflow=workflow,
                     state_store=state_store,
-                    deploy_lock=deploy_lock,
                 )
             except Exception:
-                logger.exception("Polling for image '%s' failed", image)
+                logger.exception("poll.failed image=%s", image)
 
         await asyncio.sleep(settings.poll_interval_seconds)
 
@@ -217,13 +269,23 @@ async def lifespan(app: FastAPI):
         token=settings.ghcr_token,
     )
     app.state.state_store = StateStore(settings.poll_state_file)
-    app.state.deploy_lock = threading.Lock()
+    app.state.project_registry = InMemoryProjectRegistry.from_environment()
+    app.state.lock_manager = ModelLockManager()
+    app.state.deploy_workflow = DeployWorkflow(
+        kubernetes_service=app.state.kubernetes_service,
+        state_store=app.state.state_store,
+        lock_manager=app.state.lock_manager,
+        registry=settings.ghcr_registry,
+        rollout_timeout_seconds=settings.rollout_timeout_seconds,
+        rollout_poll_interval=settings.rollout_poll_interval_seconds,
+        max_attempts=settings.deploy_max_attempts,
+    )
 
     poller_task: asyncio.Task[None] | None = None
     if settings.enable_polling and settings.watched_images:
         poller_task = asyncio.create_task(_poll_watched_images(app))
         logger.info(
-            "GHCR polling enabled for %d image(s), interval %d seconds",
+            "poll.enabled images=%d interval=%ds",
             len(settings.watched_images),
             settings.poll_interval_seconds,
         )
@@ -255,33 +317,67 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/models/deploy", response_model=ModelDeploymentResponse, status_code=status.HTTP_201_CREATED)
+def _map_deploy_exception(exc: Exception) -> HTTPException:
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=400, detail=str(exc))
+    if isinstance(exc, DeployFailure):
+        return HTTPException(status_code=502, detail=str(exc))
+    if isinstance(exc, ApiException):
+        return HTTPException(
+            status_code=502,
+            detail=f"Kubernetes API error ({exc.status}): {exc.reason}",
+        )
+    if isinstance(exc, RuntimeError):
+        return HTTPException(status_code=503, detail=str(exc))
+    return HTTPException(status_code=500, detail="Unexpected deploy error")
+
+
+@app.post(
+    "/models/deploy",
+    response_model=ModelDeploymentResponse,
+    status_code=status.HTTP_201_CREATED,
+    description="Manual/admin deploy path. Prefer POST /projects/{project_id}/pull for CI triggers.",
+)
 def deploy_model(
     payload: ModelDeploymentRequest,
-    request: Request,
     settings: Settings = Depends(get_settings),
-    kubernetes_service: KubernetesService = Depends(get_kubernetes_service),
-    state_store: StateStore = Depends(get_state_store),
+    workflow: DeployWorkflow = Depends(get_deploy_workflow),
 ) -> ModelDeploymentResponse:
-    deploy_lock: threading.Lock = request.app.state.deploy_lock
+    try:
+        return _deploy_model(request=payload, settings=settings, workflow=workflow)
+    except (ValueError, DeployFailure, ApiException, RuntimeError) as exc:
+        raise _map_deploy_exception(exc) from exc
 
-    with deploy_lock:
-        try:
-            return _deploy_model(
-                request=payload,
-                settings=settings,
-                kubernetes_service=kubernetes_service,
-                state_store=state_store,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except RuntimeError as exc:
-            raise HTTPException(status_code=503, detail=str(exc)) from exc
-        except ApiException as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Kubernetes API error ({exc.status}): {exc.reason}",
-            ) from exc
+
+@app.post(
+    "/projects/{project_id}/pull",
+    response_model=ModelDeploymentResponse,
+    status_code=status.HTTP_200_OK,
+    description="CI-triggered pull-to-deploy for a registered project.",
+)
+def pull_project(
+    project_id: str,
+    payload: ProjectPullRequest | None = None,
+    settings: Settings = Depends(get_settings),
+    project_registry: ProjectRegistry = Depends(get_project_registry),
+    ghcr_service: GHCRService = Depends(get_ghcr_service),
+    workflow: DeployWorkflow = Depends(get_deploy_workflow),
+) -> ModelDeploymentResponse:
+    project = project_registry.get(project_id.strip())
+    if project is None:
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' is not registered")
+
+    tag_override = payload.tag if payload else None
+    try:
+        return _deploy_from_project(
+            project=project,
+            tag_override=tag_override,
+            settings=settings,
+            ghcr_service=ghcr_service,
+            workflow=workflow,
+        )
+    except (ValueError, DeployFailure, ApiException, RuntimeError) as exc:
+        raise _map_deploy_exception(exc) from exc
 
 
 @app.get("/models/{model_id}/status", response_model=ModelStatusResponse)
@@ -371,9 +467,9 @@ def delete_model(
     state_store: StateStore = Depends(get_state_store),
 ) -> ModelDeleteResponse:
     normalized_model_id = normalize_model_id(model_id)
-    deploy_lock: threading.Lock = request.app.state.deploy_lock
+    lock_manager: ModelLockManager = request.app.state.lock_manager
 
-    with deploy_lock:
+    with lock_manager.for_model(normalized_model_id):
         try:
             deleted = kubernetes_service.delete_model(normalized_model_id)
             state_store.delete_model(normalized_model_id)

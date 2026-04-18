@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -175,6 +176,69 @@ class KubernetesService:
             "service_type": self.service_type,
             "external_endpoints": self._service_endpoints(service),
         }
+
+    def get_deployment_image(self, model_id: str) -> str | None:
+        deployment_name = self._deployment_name(model_id)
+        try:
+            deployment = self._apps_api_client.read_namespaced_deployment(
+                deployment_name, self.namespace
+            )
+        except ApiException as exc:
+            if exc.status == 404:
+                return None
+            raise
+
+        containers = deployment.spec.template.spec.containers or []
+        if not containers:
+            return None
+        return containers[0].image
+
+    def wait_for_rollout(self, model_id: str, *, timeout_seconds: float, poll_interval: float = 2.0) -> None:
+        deployment_name = self._deployment_name(model_id)
+        deadline = time.monotonic() + timeout_seconds
+
+        while True:
+            deployment = self._apps_api_client.read_namespaced_deployment_status(
+                name=deployment_name, namespace=self.namespace
+            )
+            generation = deployment.metadata.generation or 0
+            observed = deployment.status.observed_generation or 0
+            desired = deployment.spec.replicas or 0
+            ready = deployment.status.ready_replicas or 0
+            updated = deployment.status.updated_replicas or 0
+            unavailable = deployment.status.unavailable_replicas or 0
+
+            if (
+                observed >= generation
+                and updated >= desired
+                and ready >= desired
+                and unavailable == 0
+                and desired > 0
+            ):
+                return
+
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Deployment '{deployment_name}' did not become ready within "
+                    f"{timeout_seconds:.0f}s (ready={ready}/{desired}, unavailable={unavailable})"
+                )
+
+            time.sleep(poll_interval)
+
+    def patch_deployment_image(self, model_id: str, image: str) -> None:
+        deployment_name = self._deployment_name(model_id)
+        patch = {
+            "spec": {
+                "template": {
+                    "spec": {
+                        "containers": [{"name": "model", "image": image}],
+                    }
+                }
+            }
+        }
+        self._apps_api_client.patch_namespaced_deployment(
+            name=deployment_name, namespace=self.namespace, body=patch
+        )
 
     def list_models(self) -> list[dict[str, Any]]:
         deployments = self._apps_api_client.list_namespaced_deployment(
