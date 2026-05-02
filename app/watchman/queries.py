@@ -24,26 +24,25 @@ async def get_observers_subscribed_to_event(session: AsyncSession, event_name:st
     return (await session.scalars(query)).all()
     
 
-async def insert_new_subscription(session: AsyncSession, subscribtion:SubscriptionSchema)->None:
+async def insert_new_subscription(session: AsyncSession, subscription:SubscriptionSchema)->None:
     """Inserts new subscription"""
     get_observer_query:Select = (
                 select(Observer)
-                .where(Observer.webhook_url == subscribtion.webhook_url)
+                .where(Observer.webhook_url == subscription.webhook_url)
                 .options(selectinload(Observer.subscriptions))
             )
      
     observer = await session.scalar(get_observer_query)
 
     if observer is None:
-        observer = Observer(webhook_url=subscribtion.webhook_url)
+        observer = Observer(webhook_url=subscription.webhook_url)
         session.add(observer)
-        for event_type in subscribtion.event_types:
+        for event_type in subscription.event_types:
             observer.subscriptions.append(Subscription(event_type=event_type))
     else:
         old_event_types = {sub.event_type for sub in observer.subscriptions}
-        new_event_types = [e for e in subscribtion.event_types  if e not in old_event_types]
+        new_event_types = [e for e in subscription.event_types  if e not in old_event_types]
         for event_type in new_event_types:
             observer.subscriptions.append(Subscription(event_type=event_type))
 
-    await session.commit()
-
+    await session.flush()

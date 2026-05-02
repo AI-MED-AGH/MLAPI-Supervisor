@@ -10,7 +10,7 @@ class Observer(Base):
     __tablename__ = "observers"
    
     id:Mapped[int] = mapped_column(primary_key=True) 
-    webhook_url:Mapped[str]
+    webhook_url:Mapped[str] = mapped_column(unique=True, index=True)
     connection_errors_count:Mapped[int] = mapped_column(default=0)
 
     subscriptions: Mapped[List["Subscription"]] = relationship(
@@ -34,4 +34,4 @@ class Subscription(Base):
 
 
     def __repr__(self)->str:
-        return f"Subscription(id={self.id!r}, observer_id={self.observer_id!r}, event_id={self.event_type!r})"
+        return f"Subscription(id={self.id!r}, observer_id={self.observer_id!r}, event_type={self.event_type!r})"

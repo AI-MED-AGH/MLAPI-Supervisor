@@ -1,3 +1,4 @@
+from sqlalchemy.exc import SQLAlchemyError
 from app.watchman.queries import get_observers_subscribed_to_event, delete_observers
 from sqlalchemy.ext.asyncio import AsyncSession
 import httpx
@@ -30,7 +31,7 @@ class NotificationService:
 
             results = await asyncio.gather(*notifications, return_exceptions=True)
             for result, observer in zip(results, observers_subscribed):
-                if isinstance(result, Exception):
+                if isinstance(result, Exception) or (isinstance(result, httpx.Response) and not result.is_success):
                     observer.connection_errors_count+=1
                     if observer.connection_errors_count > self.connection_error_max:
                         observers_to_delete.append(observer)
@@ -40,7 +41,8 @@ class NotificationService:
         try:
             await delete_observers(session, observers_to_delete)
             await session.commit()
-        except Exception:
-           await session.rollback()
+        except (Exception, SQLAlchemyError) as e:
+            logger.exception(e)
+            await session.rollback()
         else:
             logger.info(f"deleted observers: {observers_to_delete}")

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, status
 from fastapi.exceptions import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
 from app.watchman.queries import insert_new_subscription
 from app.watchman.database import get_session
 from app.watchman.schemas import SubscriptionSchema
@@ -14,9 +15,10 @@ watchmanRouter = APIRouter()
 async def subscribe(subscription: SubscriptionSchema, session:AsyncSession = Depends(get_session)):
     try:
         await insert_new_subscription(session, subscription) 
-        await session.commit()
-    except Exception:
+    except (Exception, SQLAlchemyError) as e:
         await session.rollback()
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error occured while subscribing")
+        logger.exception(e)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error occurred while subscribing")
     else:
+        await session.commit()
         logger.info(f"\n added subscription: {subscription}")
