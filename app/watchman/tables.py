@@ -1,6 +1,5 @@
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from typing import List
 
 
 class Base(DeclarativeBase):
@@ -8,12 +7,12 @@ class Base(DeclarativeBase):
 
 class Observer(Base):
     __tablename__ = "observers"
-   
-    id:Mapped[int] = mapped_column(primary_key=True) 
+
+    id:Mapped[int] = mapped_column(primary_key=True)
     webhook_url:Mapped[str] = mapped_column(unique=True, index=True)
     connection_errors_count:Mapped[int] = mapped_column(default=0)
 
-    subscriptions: Mapped[List["Subscription"]] = relationship(
+    subscriptions: Mapped[list["Subscription"]] = relationship(
             back_populates="observer",
             cascade="all, delete-orphan",
         )
@@ -26,7 +25,7 @@ class Subscription(Base):
 
     id:Mapped[int] = mapped_column(primary_key=True)
     observer_id:Mapped[int] = mapped_column(ForeignKey("observers.id"))
-    event_type:Mapped[str] 
+    event_type:Mapped[str]
 
     observer: Mapped["Observer"] = relationship(
         back_populates="subscriptions",

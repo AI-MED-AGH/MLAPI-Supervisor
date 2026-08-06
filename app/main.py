@@ -1,6 +1,9 @@
-from fastapi import FastAPI
-from app.watchman import watchmanRouter, engine, Base
 from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
+from app.watchman import Base, engine, watchmanRouter
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
