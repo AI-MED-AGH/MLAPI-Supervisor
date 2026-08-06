@@ -1,9 +1,21 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+
+from app.watchman import Base, engine, watchmanRouter
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
 
 app = FastAPI(
     title="MLAPI Supervisor",
     description="Supervisor controlling ML model instances",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 
@@ -15,3 +27,5 @@ def root() -> dict[str, str]:
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+app.include_router(watchmanRouter, prefix="/observers")
