@@ -4,3 +4,4 @@ pydantic==2.11.1
 SQLAlchemy==2.0.28
 httpx==0.28.1
 asyncpg==0.31.0
+kubernetes==32.0.1
