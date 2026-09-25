@@ -26,7 +26,7 @@ class EventMonitoring:
         connection_error_max: int = 5,
         timeout: int = 5,
     ) -> None:
-        self._kubernets_service = kubernetes_service
+        self._kubernetes_service = kubernetes_service
         self._notification_service = NotificationService(connection_error_max, timeout)
         self._previous_models_status = {}
         self._running = False
@@ -60,7 +60,7 @@ class EventMonitoring:
 
     async def _sent_events(self) -> None:
         """Compares the old statuses with the new ones and creates event payload based on model snapshots provided by KubernetesService"""
-        cluster_statuses = self._kubernets_service.get_models_cluster_status()
+        cluster_statuses = self._kubernetes_service.get_models_cluster_status()
         for model_data in cluster_statuses:
             model_id = model_data["name"]
             current_status = model_data["status"]

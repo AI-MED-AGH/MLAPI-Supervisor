@@ -5,8 +5,8 @@ import httpx
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.queries import delete_observers, get_observers_subscribed_to_event
 from app.schemas import EventPayload
-from app.watchman.queries import delete_observers, get_observers_subscribed_to_event
 
 logger = logging.getLogger(__name__)
 

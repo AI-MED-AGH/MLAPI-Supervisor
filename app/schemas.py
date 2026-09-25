@@ -157,3 +157,8 @@ class EventPayload(BaseModel):
             timestamp=datetime.now(timezone.utc),
             data=snapshot,
         )
+
+
+class SubscriptionSchema(BaseModel):
+    webhook_url: str
+    event_types: list[str]

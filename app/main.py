@@ -4,11 +4,16 @@ import asyncio
 import contextlib
 import logging
 from contextlib import asynccontextmanager
+from typing import Annotated
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from kubernetes.client.rest import ApiException
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings, get_settings
+from app.database import engine, get_session
+from app.queries import insert_new_subscription
 from app.schemas import (
     ModelDeleteResponse,
     ModelDeploymentRequest,
@@ -18,6 +23,7 @@ from app.schemas import (
     ModelSnapshot,
     ModelStatusResponse,
     ProjectPullRequest,
+    SubscriptionSchema,
     build_image_reference,
     normalize_model_id,
 )
@@ -25,6 +31,7 @@ from app.services import (
     DeployFailure,
     DeployRequest,
     DeployWorkflow,
+    EventMonitoring,
     GHCRService,
     InMemoryProjectRegistry,
     KubernetesService,
@@ -33,6 +40,7 @@ from app.services import (
     ProjectRegistry,
     StateStore,
 )
+from app.tables import Base
 
 logger = logging.getLogger(__name__)
 
@@ -305,16 +313,23 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
+    event_monitoring = EventMonitoring(
+        kubernetes_service=app.state.kubernetes_service,
+        connection_error_max=5,
+        timeout=5,
+    )
+
+    await event_monitoring.start(60)  # interval 60 seconds
+
     try:
         yield
     finally:
+        await event_monitoring.stop()
         if poller_task:
             poller_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await poller_task
 
-
-from app.watchman import Base, engine, watchmanRouter
 
 app = FastAPI(
     title="MLAPI Supervisor",
@@ -334,12 +349,37 @@ def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
 
-app.include_router(watchmanRouter, prefix="/observers")
+@app.post("/observers", status_code=status.HTTP_201_CREATED)
+async def subscribe(
+    subscription: SubscriptionSchema,
+    session: Annotated[AsyncSession, Depends(get_session)],
+):
+    """
+    Subscribes to a certain event types, in order to recive notifications, at a provided webhook url.
+
+    Raises:
+        HTTPException: If an error occurs while subscribing, a 500 Internal Server Error is raised.
+
+    Returns:
+        Returns a 201 Created status code on success.
+    """
+    try:
+        await insert_new_subscription(session, subscription)
+    except (Exception, SQLAlchemyError):
+        await session.rollback()
+        logger.exception("Error occurred while subscribing")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Error occurred while subscribing",
+        )
+    else:
+        await session.commit()
+        logger.info(f"Added subscription: {subscription}\n")
 
 
 @app.get("/status/models", response_model=list[ModelSnapshot])
 def get_models_snapshot_list(
-    kubernetes_service: KubernetesService = Depends(get_kubernetes_service),
+    kubernetes_service: Annotated[KubernetesService, Depends(get_kubernetes_service)],
 ):
     try:
         models_cluster_status = kubernetes_service.get_models_cluster_status()
