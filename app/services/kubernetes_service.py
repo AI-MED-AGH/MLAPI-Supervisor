@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -9,6 +10,8 @@ from typing import Any
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from kubernetes.config.config_exception import ConfigException
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -34,10 +37,15 @@ class KubernetesService:
         self.image_pull_secret_name = image_pull_secret_name
         self._apps_api: client.AppsV1Api | None = None
         self._core_api: client.CoreV1Api | None = None
+        self._custom_api: client.CustomObjectsApi | None = None
 
-    def ensure_registry_pull_secret(self, *, username: str, token: str, registry: str) -> None:
+    def ensure_registry_pull_secret(
+        self, *, username: str, token: str, registry: str
+    ) -> None:
         if not username or not token:
-            raise ValueError("username and token are required to create image pull secret")
+            raise ValueError(
+                "username and token are required to create image pull secret"
+            )
 
         if not self.image_pull_secret_name:
             raise ValueError("image_pull_secret_name is not configured")
@@ -55,9 +63,9 @@ class KubernetesService:
                 }
             }
         }
-        docker_config_base64 = base64.b64encode(json.dumps(docker_config).encode("utf-8")).decode(
-            "utf-8"
-        )
+        docker_config_base64 = base64.b64encode(
+            json.dumps(docker_config).encode("utf-8")
+        ).decode("utf-8")
 
         secret_body = client.V1Secret(
             metadata=client.V1ObjectMeta(name=self.image_pull_secret_name),
@@ -75,7 +83,9 @@ class KubernetesService:
         except ApiException as exc:
             if exc.status != 404:
                 raise
-            core_api.create_namespaced_secret(namespace=self.namespace, body=secret_body)
+            core_api.create_namespaced_secret(
+                namespace=self.namespace, body=secret_body
+            )
 
     def upsert_model(self, spec: DeploymentSpec) -> dict[str, Any]:
         self._ensure_namespace()
@@ -89,7 +99,9 @@ class KubernetesService:
         core_api = self._core_api_client
 
         try:
-            apps_api.read_namespaced_deployment(name=deployment_name, namespace=self.namespace)
+            apps_api.read_namespaced_deployment(
+                name=deployment_name, namespace=self.namespace
+            )
             apps_api.patch_namespaced_deployment(
                 name=deployment_name,
                 namespace=self.namespace,
@@ -98,10 +110,14 @@ class KubernetesService:
         except ApiException as exc:
             if exc.status != 404:
                 raise
-            apps_api.create_namespaced_deployment(namespace=self.namespace, body=deployment_body)
+            apps_api.create_namespaced_deployment(
+                namespace=self.namespace, body=deployment_body
+            )
 
         try:
-            core_api.read_namespaced_service(name=service_name, namespace=self.namespace)
+            core_api.read_namespaced_service(
+                name=service_name, namespace=self.namespace
+            )
             core_api.patch_namespaced_service(
                 name=service_name,
                 namespace=self.namespace,
@@ -110,7 +126,9 @@ class KubernetesService:
         except ApiException as exc:
             if exc.status != 404:
                 raise
-            core_api.create_namespaced_service(namespace=self.namespace, body=service_body)
+            core_api.create_namespaced_service(
+                namespace=self.namespace, body=service_body
+            )
 
         return self.get_model_status(spec.model_id)
 
@@ -123,14 +141,18 @@ class KubernetesService:
         core_api = self._core_api_client
 
         try:
-            apps_api.delete_namespaced_deployment(name=deployment_name, namespace=self.namespace)
+            apps_api.delete_namespaced_deployment(
+                name=deployment_name, namespace=self.namespace
+            )
             deleted_any = True
         except ApiException as exc:
             if exc.status != 404:
                 raise
 
         try:
-            core_api.delete_namespaced_service(name=service_name, namespace=self.namespace)
+            core_api.delete_namespaced_service(
+                name=service_name, namespace=self.namespace
+            )
             deleted_any = True
         except ApiException as exc:
             if exc.status != 404:
@@ -146,7 +168,9 @@ class KubernetesService:
         core_api = self._core_api_client
 
         try:
-            deployment = apps_api.read_namespaced_deployment(deployment_name, self.namespace)
+            deployment = apps_api.read_namespaced_deployment(
+                deployment_name, self.namespace
+            )
         except ApiException as exc:
             if exc.status == 404:
                 raise KeyError(f"Model deployment '{model_id}' was not found") from exc
@@ -162,7 +186,11 @@ class KubernetesService:
         desired_replicas = deployment.spec.replicas or 0
         ready_replicas = deployment.status.ready_replicas or 0
         available_replicas = deployment.status.available_replicas or 0
-        phase = "ready" if available_replicas >= desired_replicas and desired_replicas > 0 else "deploying"
+        phase = (
+            "ready"
+            if available_replicas >= desired_replicas and desired_replicas > 0
+            else "deploying"
+        )
 
         return {
             "model_id": model_id,
@@ -193,7 +221,9 @@ class KubernetesService:
             return None
         return containers[0].image
 
-    def wait_for_rollout(self, model_id: str, *, timeout_seconds: float, poll_interval: float = 2.0) -> None:
+    def wait_for_rollout(
+        self, model_id: str, *, timeout_seconds: float, poll_interval: float = 2.0
+    ) -> None:
         deployment_name = self._deployment_name(model_id)
         deadline = time.monotonic() + timeout_seconds
 
@@ -258,7 +288,9 @@ class KubernetesService:
 
             service = None
             try:
-                service = self._core_api_client.read_namespaced_service(service_name, self.namespace)
+                service = self._core_api_client.read_namespaced_service(
+                    service_name, self.namespace
+                )
             except ApiException as exc:
                 if exc.status != 404:
                     raise
@@ -286,6 +318,201 @@ class KubernetesService:
 
         return items
 
+    def get_models_cluster_status(self) -> list[dict[str, Any]]:
+        """
+        Gathers aggregate status for all managed models.
+        Returns a list of structured JSON summaries with replica breakdowns and pod states.
+        """
+        deployments = self._apps_api_client.list_namespaced_deployment(
+            namespace=self.namespace,
+            label_selector="managed-by=mlapi-supervisor",
+        )
+        pods = self._core_api_client.list_namespaced_pod(
+            namespace=self.namespace,
+            label_selector="managed-by=mlapi-supervisor",
+        )
+        cpu_metrics = self._get_cpu_usage_map()
+
+        pods_by_model: dict[str, list[client.V1Pod]] = {}
+        for pod in pods.items:
+            labels = pod.metadata.labels or {}
+            model_id = labels.get("model-id")
+            if model_id:
+                pods_by_model.setdefault(model_id, []).append(pod)
+
+        cluster_status: list[dict[str, Any]] = []
+
+        for deployment in deployments.items:
+            labels = deployment.metadata.labels or {}
+            model_id = labels.get("model-id")
+            if not model_id:
+                continue
+
+            model_pods = pods_by_model.get(model_id, [])
+            parsed_pods = self._parse_pods(model_pods, cpu_metrics)
+            replicas_info = self._extract_replica_counts(deployment)
+            overall_status = self._evaluate_model_status(replicas_info, parsed_pods)
+            cpu_usage = self._calculate_cpu_usage_for_model(cpu_metrics, model_pods)
+
+            cluster_status.append(
+                {
+                    "name": model_id,
+                    "status": overall_status,
+                    "replicas": replicas_info,
+                    "pods": parsed_pods,
+                    "cpu_usage": cpu_usage,
+                }
+            )
+
+        return cluster_status
+
+    @classmethod
+    def _parse_pods(
+        cls, model_pods: list[client.V1Pod], cpu_metrics: dict[str, int]
+    ) -> list[dict[str, Any]]:
+        """Parses pods into [{name, phase, status, reason, cpu_usage}, ...]"""
+        parsed_pods = []
+        for pod in model_pods:
+            try:
+                parsed_pod = cls._parse_pod_info(pod, cpu_metrics)
+            except Exception:
+                logger.exception("Failed to parse kubernetes pod")
+            else:
+                parsed_pods.append(parsed_pod)
+        return parsed_pods
+
+    @staticmethod
+    def _extract_replica_counts(deployment: client.V1Deployment) -> dict[str, int]:
+        """Extracts desired, ready, and available replica numbers."""
+        return {
+            "desired": deployment.spec.replicas or 0,
+            "ready": deployment.status.ready_replicas or 0,
+            "available": deployment.status.available_replicas or 0,
+        }
+
+    @classmethod
+    def _parse_pod_info(
+        cls, pod: client.V1Pod, cpu_metrics: dict[str, int]
+    ) -> dict[str, Any]:
+        """
+        Parses a single pod into {name, phase, state, reason, cpu_usage}.
+        Throws if pod has no metadata or no name
+        """
+        assert pod.metadata is not None, (
+            "Received a Pod without metadata from the Kubernetes API"
+        )
+        assert pod.metadata.name is not None, (
+            "Received a Pod without name from the Kubernetes API"
+        )
+
+        phase, state, reason = cls._extract_container_state(pod)
+        name = pod.metadata.name
+        cpu_usage = cpu_metrics.get(name, 0)
+        return {
+            "name": name,
+            "phase": phase,
+            "state": state,
+            "reason": reason,
+            "cpu_usage": f"{cpu_usage}m",
+        }
+
+    @staticmethod
+    def _extract_container_state(
+        pod: client.V1Pod,
+    ) -> tuple[str | None, str | None, str | None]:
+        """
+        Inspects container statuses to extract execution state and failure reasons
+        (e.g., CrashLoopBackOff, ImagePullBackOff, OOMKilled).
+        """
+        if pod.status is None:
+            return None, None, None
+
+        phase = pod.status.phase
+        container_statuses = pod.status.container_statuses or []
+        for cs in container_statuses:
+            state = cs.state
+            if state.waiting:
+                return phase, "waiting", state.waiting.reason
+            if state.terminated:
+                return phase, "terminated", state.terminated.reason
+            if state.running:
+                return phase, "running", None
+
+        return phase, "pending", None
+
+    @staticmethod
+    def _evaluate_model_status(
+        replicas: dict[str, int], pods: list[dict[str, Any]]
+    ) -> str:
+        """Determines overall health: e.g. Running, Degraded, ScaledToZero, or error reason."""
+        if replicas["desired"] == 0:
+            return "ScaledToZero"
+
+        if not pods:
+            return "Pending"
+
+        for pod in pods:
+            if pod["reason"] in {
+                "CrashLoopBackOff",
+                "ImagePullBackOff",
+                "ErrImagePull",
+                "OOMKilled",
+            }:
+                return pod["reason"]
+
+        if replicas["ready"] < replicas["desired"]:
+            return "Degraded"
+
+        return "Running"
+
+    def _get_cpu_usage_map(self) -> dict[str, int]:
+        """Queries Metrics Server and aggregates total nanocores per model into millicores."""
+        try:
+            metrics = self._custom_api_client.list_namespaced_custom_object(
+                group="metrics.k8s.io",
+                version="v1beta1",
+                namespace=self.namespace,
+                plural="pods",
+                label_selector="managed-by=mlapi-supervisor",
+            )
+        except ApiException as exc:
+            if (
+                exc.status == 404
+            ):  # if there is no metrics server then return nothing, but don't crash.
+                return {}
+            raise
+
+        usage_map: dict[str, int] = {}
+        for pod in metrics.get("items", []):
+            metadata = pod.get("metadata", {})
+            name = metadata.get("name")
+            if not name:
+                continue
+
+            usage_map[name] = 0
+
+            for container in pod.get("containers", []):
+                usage_map[name] += self._extract_metric_data(container)
+
+        return usage_map
+
+    @staticmethod
+    def _extract_metric_data(container: dict[str, Any]) -> int:
+        cpu_str = container.get("usage", {}).get("cpu", "0m")
+        if cpu_str.endswith("n"):
+            return int(cpu_str[:-1]) // 1_000_000
+        return int(cpu_str[:-1])
+
+    @staticmethod
+    def _calculate_cpu_usage_for_model(
+        cpu_metrics: dict[str, int], pods: list[client.V1Pod]
+    ) -> str:
+        sum = 0
+        for pod in pods:
+            if pod.metadata and pod.metadata.name:
+                sum += cpu_metrics.get(pod.metadata.name, 0)
+        return f"{sum}m"
+
     @property
     def _apps_api_client(self) -> client.AppsV1Api:
         self._ensure_clients()
@@ -296,8 +523,17 @@ class KubernetesService:
         self._ensure_clients()
         return self._core_api  # type: ignore[return-value]
 
+    @property
+    def _custom_api_client(self) -> client.CustomObjectsApi:
+        self._ensure_clients()
+        return self._custom_api  # type: ignore[return-value]
+
     def _ensure_clients(self) -> None:
-        if self._apps_api is not None and self._core_api is not None:
+        if (
+            self._apps_api is not None
+            and self._core_api is not None
+            and self._custom_api is not None
+        ):
             return
 
         try:
@@ -313,6 +549,7 @@ class KubernetesService:
 
         self._apps_api = client.AppsV1Api()
         self._core_api = client.CoreV1Api()
+        self._custom_api = client.CustomObjectsApi()
 
     def _ensure_namespace(self) -> None:
         core_api = self._core_api_client
@@ -322,7 +559,9 @@ class KubernetesService:
             if exc.status != 404:
                 raise
             core_api.create_namespace(
-                body=client.V1Namespace(metadata=client.V1ObjectMeta(name=self.namespace))
+                body=client.V1Namespace(
+                    metadata=client.V1ObjectMeta(name=self.namespace)
+                )
             )
 
     @staticmethod
@@ -333,14 +572,18 @@ class KubernetesService:
     def _service_name(model_id: str) -> str:
         return f"model-{model_id}-svc"
 
-    def _build_deployment_body(self, deployment_name: str, spec: DeploymentSpec) -> dict[str, Any]:
+    def _build_deployment_body(
+        self, deployment_name: str, spec: DeploymentSpec
+    ) -> dict[str, Any]:
         labels = {
             "app": "ml-model",
             "model-id": spec.model_id,
             "managed-by": "mlapi-supervisor",
         }
 
-        env_vars = [{"name": key, "value": value} for key, value in sorted(spec.env.items())]
+        env_vars = [
+            {"name": key, "value": value} for key, value in sorted(spec.env.items())
+        ]
         pod_spec: dict[str, Any] = {
             "containers": [
                 {
@@ -368,7 +611,9 @@ class KubernetesService:
             },
         }
 
-    def _build_service_body(self, service_name: str, spec: DeploymentSpec) -> dict[str, Any]:
+    def _build_service_body(
+        self, service_name: str, spec: DeploymentSpec
+    ) -> dict[str, Any]:
         labels = {
             "app": "ml-model",
             "model-id": spec.model_id,

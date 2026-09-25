@@ -41,7 +41,9 @@ def build_image_reference(image: str, tag: str, registry: str) -> str:
 
 
 class ModelDeploymentRequest(BaseModel):
-    model_id: str = Field(..., description="Unique model identifier used as Kubernetes object prefix.")
+    model_id: str = Field(
+        ..., description="Unique model identifier used as Kubernetes object prefix."
+    )
     image: str = Field(..., description="Image repository path, e.g. owner/model-api.")
     tag: str = Field(default="latest", description="Image tag to deploy.")
     replicas: int = Field(default=1, ge=1, le=10)
@@ -83,7 +85,10 @@ class ModelDeploymentResponse(BaseModel):
 
 
 class ProjectPullRequest(BaseModel):
-    tag: str | None = Field(default=None, description="Optional tag override; otherwise uses project default or GHCR latest.")
+    tag: str | None = Field(
+        default=None,
+        description="Optional tag override; otherwise uses project default or GHCR latest.",
+    )
 
     @field_validator("tag")
     @classmethod
@@ -126,3 +131,10 @@ class ModelListItem(BaseModel):
 
 class ModelListResponse(BaseModel):
     items: list[ModelListItem]
+
+
+class ModelSnapshot(BaseModel):
+    name: str
+    status: str
+    replicas: int
+    cpu_usage: str

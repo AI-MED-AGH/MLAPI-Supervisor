@@ -1,11 +1,9 @@
 from __future__ import annotations
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI
 
 import asyncio
 import contextlib
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from kubernetes.client.rest import ApiException
@@ -17,6 +15,7 @@ from app.schemas import (
     ModelDeploymentResponse,
     ModelListItem,
     ModelListResponse,
+    ModelSnapshot,
     ModelStatusResponse,
     ProjectPullRequest,
     build_image_reference,
@@ -41,7 +40,9 @@ logger = logging.getLogger(__name__)
 def get_kubernetes_service(request: Request) -> KubernetesService:
     service = getattr(request.app.state, "kubernetes_service", None)
     if service is None:
-        raise HTTPException(status_code=503, detail="Kubernetes service is not initialized")
+        raise HTTPException(
+            status_code=503, detail="Kubernetes service is not initialized"
+        )
     return service
 
 
@@ -62,14 +63,18 @@ def get_ghcr_service(request: Request) -> GHCRService:
 def get_project_registry(request: Request) -> ProjectRegistry:
     registry = getattr(request.app.state, "project_registry", None)
     if registry is None:
-        raise HTTPException(status_code=503, detail="Project registry is not initialized")
+        raise HTTPException(
+            status_code=503, detail="Project registry is not initialized"
+        )
     return registry
 
 
 def get_deploy_workflow(request: Request) -> DeployWorkflow:
     workflow = getattr(request.app.state, "deploy_workflow", None)
     if workflow is None:
-        raise HTTPException(status_code=503, detail="Deploy workflow is not initialized")
+        raise HTTPException(
+            status_code=503, detail="Deploy workflow is not initialized"
+        )
     return workflow
 
 
@@ -107,7 +112,9 @@ def _stored_image_reference(
         return None
 
     try:
-        return build_image_reference(image=image, tag=tag, registry=settings.ghcr_registry)
+        return build_image_reference(
+            image=image, tag=tag, registry=settings.ghcr_registry
+        )
     except ValueError:
         return None
 
@@ -125,7 +132,9 @@ def _deploy_model(
         registry=settings.ghcr_registry,
     )
 
-    ghcr_username = settings.ghcr_username or _image_owner(request.image, settings.ghcr_registry)
+    ghcr_username = settings.ghcr_username or _image_owner(
+        request.image, settings.ghcr_registry
+    )
     deploy_request = DeployRequest(
         model_id=model_id,
         image=request.image,
@@ -293,6 +302,9 @@ async def lifespan(app: FastAPI):
             settings.poll_interval_seconds,
         )
 
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
     try:
         yield
     finally:
@@ -303,13 +315,6 @@ async def lifespan(app: FastAPI):
 
 
 from app.watchman import Base, engine, watchmanRouter
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
 
 app = FastAPI(
     title="MLAPI Supervisor",
@@ -328,7 +333,36 @@ def root() -> dict[str, str]:
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
+
 app.include_router(watchmanRouter, prefix="/observers")
+
+
+@app.get("/status/models", response_model=list[ModelSnapshot])
+def get_models_snapshot_list(
+    kubernetes_service: KubernetesService = Depends(get_kubernetes_service),
+):
+    try:
+        models_cluster_status = kubernetes_service.get_models_cluster_status()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ApiException as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Kubernetes API error ({exc.status}): {exc.reason}",
+        ) from exc
+
+    payload = [
+        {
+            "name": status["name"],
+            "status": status["status"],
+            "replicas": status["replicas"]["ready"],
+            "cpu_usage": status["cpu_usage"],
+        }
+        for status in models_cluster_status
+    ]
+
+    return payload
+
 
 def _map_deploy_exception(exc: Exception) -> HTTPException:
     if isinstance(exc, ValueError):
@@ -378,7 +412,9 @@ def pull_project(
 ) -> ModelDeploymentResponse:
     project = project_registry.get(project_id.strip())
     if project is None:
-        raise HTTPException(status_code=404, detail=f"Project '{project_id}' is not registered")
+        raise HTTPException(
+            status_code=404, detail=f"Project '{project_id}' is not registered"
+        )
 
     tag_override = payload.tag if payload else None
     try:
