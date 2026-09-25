@@ -22,12 +22,10 @@ class EventMonitor:
     def __init__(
         self,
         kubernetes_service: KubernetesService,
-        interval: int = 60,
-        connection_error_max: int = 5,
-        timeout: int = 5,
+        notification_service: NotificationService,
     ) -> None:
         self._kubernetes_service = kubernetes_service
-        self._notification_service = NotificationService(connection_error_max, timeout)
+        self._notification_service = notification_service
         self._previous_models_status = {}
         self._running = False
         self._task = None

@@ -40,6 +40,7 @@ from app.services import (
     ProjectRegistry,
     StateStore,
 )
+from app.services.notification_service import NotificationService
 from app.tables import Base
 
 logger = logging.getLogger(__name__)
@@ -315,8 +316,7 @@ async def lifespan(app: FastAPI):
 
     event_monitor_worker = EventMonitor(
         kubernetes_service=app.state.kubernetes_service,
-        connection_error_max=5,
-        timeout=5,
+        notification_service=NotificationService(connection_error_max=5, timeout=5),
     )
 
     await event_monitor_worker.start(60)  # interval 60 seconds
