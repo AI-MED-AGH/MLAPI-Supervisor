@@ -11,6 +11,8 @@ from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 from kubernetes.config.config_exception import ConfigException
 
+from app.schemas import ModelReplicas, ModelSnapshot, PodSnapshot
+
 logger = logging.getLogger(__name__)
 
 
@@ -318,7 +320,7 @@ class KubernetesService:
 
         return items
 
-    def get_models_cluster_status(self) -> list[dict[str, Any]]:
+    def get_models_cluster_status(self) -> list[ModelSnapshot]:
         """
         Gathers aggregate status for all managed models.
         Returns a list of structured JSON summaries with replica breakdowns and pod states.
@@ -340,7 +342,7 @@ class KubernetesService:
             if model_id:
                 pods_by_model.setdefault(model_id, []).append(pod)
 
-        cluster_status: list[dict[str, Any]] = []
+        cluster_status: list[ModelSnapshot] = []
 
         for deployment in deployments.items:
             labels = deployment.metadata.labels or {}
@@ -355,13 +357,13 @@ class KubernetesService:
             cpu_usage = self._calculate_cpu_usage_for_model(cpu_metrics, model_pods)
 
             cluster_status.append(
-                {
-                    "name": model_id,
-                    "status": overall_status,
-                    "replicas": replicas_info,
-                    "pods": parsed_pods,
-                    "cpu_usage": cpu_usage,
-                }
+                ModelSnapshot(
+                    name=model_id,
+                    status=overall_status,
+                    replicas=replicas_info,
+                    pods=parsed_pods,
+                    cpu_usage=cpu_usage,
+                )
             )
 
         return cluster_status
@@ -369,7 +371,7 @@ class KubernetesService:
     @classmethod
     def _parse_pods(
         cls, model_pods: list[client.V1Pod], cpu_metrics: dict[str, int]
-    ) -> list[dict[str, Any]]:
+    ) -> list[PodSnapshot]:
         """Parses pods into [{name, phase, status, reason, cpu_usage}, ...]"""
         parsed_pods = []
         for pod in model_pods:
@@ -382,18 +384,18 @@ class KubernetesService:
         return parsed_pods
 
     @staticmethod
-    def _extract_replica_counts(deployment: client.V1Deployment) -> dict[str, int]:
+    def _extract_replica_counts(deployment: client.V1Deployment) -> ModelReplicas:
         """Extracts desired, ready, and available replica numbers."""
-        return {
-            "desired": deployment.spec.replicas or 0,
-            "ready": deployment.status.ready_replicas or 0,
-            "available": deployment.status.available_replicas or 0,
-        }
+        return ModelReplicas(
+            desired=deployment.spec.replicas or 0,
+            ready=deployment.status.ready_replicas or 0,
+            available=deployment.status.available_replicas or 0,
+        )
 
     @classmethod
     def _parse_pod_info(
         cls, pod: client.V1Pod, cpu_metrics: dict[str, int]
-    ) -> dict[str, Any]:
+    ) -> PodSnapshot:
         """
         Parses a single pod into {name, phase, state, reason, cpu_usage}.
         Throws if pod has no metadata or no name
@@ -408,13 +410,13 @@ class KubernetesService:
         phase, state, reason = cls._extract_container_state(pod)
         name = pod.metadata.name
         cpu_usage = cpu_metrics.get(name, 0)
-        return {
-            "name": name,
-            "phase": phase,
-            "state": state,
-            "reason": reason,
-            "cpu_usage": f"{cpu_usage}m",
-        }
+        return PodSnapshot(
+            name=name,
+            phase=phase,
+            state=state,
+            reason=reason,
+            cpu_usage=f"{cpu_usage}m",
+        )
 
     @staticmethod
     def _extract_container_state(
@@ -441,26 +443,24 @@ class KubernetesService:
         return phase, "pending", None
 
     @staticmethod
-    def _evaluate_model_status(
-        replicas: dict[str, int], pods: list[dict[str, Any]]
-    ) -> str:
+    def _evaluate_model_status(replicas: ModelReplicas, pods: list[PodSnapshot]) -> str:
         """Determines overall health: e.g. Running, Degraded, ScaledToZero, or error reason."""
-        if replicas["desired"] == 0:
+        if replicas.desired == 0:
             return "ScaledToZero"
 
         if not pods:
             return "Pending"
 
         for pod in pods:
-            if pod["reason"] in {
+            if pod.reason in {
                 "CrashLoopBackOff",
                 "ImagePullBackOff",
                 "ErrImagePull",
                 "OOMKilled",
             }:
-                return pod["reason"]
+                return pod.reason
 
-        if replicas["ready"] < replicas["desired"]:
+        if replicas.ready < replicas.desired:
             return "Degraded"
 
         return "Running"

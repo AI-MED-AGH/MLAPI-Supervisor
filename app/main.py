@@ -20,7 +20,7 @@ from app.schemas import (
     ModelDeploymentResponse,
     ModelListItem,
     ModelListResponse,
-    ModelSnapshot,
+    ModelSnapshotEndpoint,
     ModelStatusResponse,
     ProjectPullRequest,
     SubscriptionSchema,
@@ -31,7 +31,7 @@ from app.services import (
     DeployFailure,
     DeployRequest,
     DeployWorkflow,
-    EventMonitoring,
+    EventMonitor,
     GHCRService,
     InMemoryProjectRegistry,
     KubernetesService,
@@ -313,18 +313,18 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    event_monitoring = EventMonitoring(
+    event_monitor_worker = EventMonitor(
         kubernetes_service=app.state.kubernetes_service,
         connection_error_max=5,
         timeout=5,
     )
 
-    await event_monitoring.start(60)  # interval 60 seconds
+    await event_monitor_worker.start(60)  # interval 60 seconds
 
     try:
         yield
     finally:
-        await event_monitoring.stop()
+        await event_monitor_worker.stop()
         if poller_task:
             poller_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -377,7 +377,7 @@ async def subscribe(
         logger.info(f"Added subscription: {subscription}\n")
 
 
-@app.get("/status/models", response_model=list[ModelSnapshot])
+@app.get("/status/models", response_model=list[ModelSnapshotEndpoint])
 def get_models_snapshot_list(
     kubernetes_service: Annotated[KubernetesService, Depends(get_kubernetes_service)],
 ):

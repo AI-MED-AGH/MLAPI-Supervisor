@@ -259,46 +259,46 @@ def test_get_models_cluster_snapshot(
     service = KubernetesService(namespace="ml-production")
     results = service.get_models_cluster_status()
 
-    models = {m["name"]: m for m in results}
+    models = {m.name: m for m in results}
     assert len(models) == 4
 
     yolo = models["yolo-v8"]
-    assert yolo["status"] == "Running"
-    assert yolo["replicas"]["desired"] == 2
-    assert yolo["replicas"]["ready"] == 2
-    assert yolo["replicas"]["available"] == 2
-    assert yolo["cpu_usage"] == "2100m"  # 1000m + 1100m
-    assert len(yolo["pods"]) == 2
-    assert all(p["state"] == "running" for p in yolo["pods"])
-    assert all(p["reason"] is None for p in yolo["pods"])
+    assert yolo.status == "Running"
+    assert yolo.replicas.desired == 2
+    assert yolo.replicas.ready == 2
+    assert yolo.replicas.available == 2
+    assert yolo.cpu_usage == "2100m"  # 1000m + 1100m
+    assert len(yolo.pods) == 2
+    assert all(p.state == "running" for p in yolo.pods)
+    assert all(p.reason is None for p in yolo.pods)
 
     resnet = models["resnet50"]
-    assert resnet["status"] == "CrashLoopBackOff"
-    assert resnet["replicas"]["desired"] == 2
-    assert resnet["replicas"]["ready"] == 1
-    assert resnet["replicas"]["available"] == 1
-    assert resnet["cpu_usage"] == "500m"
-    assert len(resnet["pods"]) == 2
+    assert resnet.status == "CrashLoopBackOff"
+    assert resnet.replicas.desired == 2
+    assert resnet.replicas.ready == 1
+    assert resnet.replicas.available == 1
+    assert resnet.cpu_usage == "500m"
+    assert len(resnet.pods) == 2
 
-    err_pod = next(p for p in resnet["pods"] if p["name"] == "resnet50-pod-err")
-    assert err_pod["phase"] == "Running"
-    assert err_pod["state"] == "waiting"
-    assert err_pod["reason"] == "CrashLoopBackOff"
-    assert err_pod["cpu_usage"] == "0m"
+    err_pod = next(p for p in resnet.pods if p.name == "resnet50-pod-err")
+    assert err_pod.phase == "Running"
+    assert err_pod.state == "waiting"
+    assert err_pod.reason == "CrashLoopBackOff"
+    assert err_pod.cpu_usage == "0m"
 
     llama = models["llama3"]
-    assert llama["status"] == "Degraded"
-    assert llama["replicas"]["desired"] == 3
-    assert llama["replicas"]["ready"] == 2
-    assert llama["replicas"]["available"] == 1
-    assert llama["cpu_usage"] == "4000m"
-    assert len(llama["pods"]) == 2
-    assert all(p["state"] == "running" for p in llama["pods"])
+    assert llama.status == "Degraded"
+    assert llama.replicas.desired == 3
+    assert llama.replicas.ready == 2
+    assert llama.replicas.available == 1
+    assert llama.cpu_usage == "4000m"
+    assert len(llama.pods) == 2
+    assert all(p.state == "running" for p in llama.pods)
 
     empty = models["empty"]
-    assert empty["status"] == "ScaledToZero"
-    assert empty["replicas"]["desired"] == 0
-    assert empty["replicas"]["ready"] == 0
-    assert empty["replicas"]["available"] == 0
-    assert empty["cpu_usage"] == "0m"
-    assert len(empty["pods"]) == 0
+    assert empty.status == "ScaledToZero"
+    assert empty.replicas.desired == 0
+    assert empty.replicas.ready == 0
+    assert empty.replicas.available == 0
+    assert empty.cpu_usage == "0m"
+    assert len(empty.pods) == 0

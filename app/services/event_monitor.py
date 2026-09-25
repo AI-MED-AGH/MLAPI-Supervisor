@@ -3,17 +3,17 @@ import logging
 
 from kubernetes.client.rest import ApiException
 from sqlalchemy.ext.asyncio import AsyncSession
-from watchman.notification_service import NotificationService
 
+from app.database import SessionLocal
 from app.schemas import EventPayload
-from app.watchman.database import SessionLocal
 
 from .kubernetes_service import KubernetesService
+from .notification_service import NotificationService
 
 logger = logging.getLogger(__name__)
 
 
-class EventMonitoring:
+class EventMonitor:
     """
     Background worker that scans, every interval, k8 cluster via KubernetesService, checks for changed statuses of models
     and sends model snapshot via NotificationService to registered webhooks.
@@ -37,8 +37,8 @@ class EventMonitoring:
         self._running = True
         self._task = asyncio.create_task(self._monitor(interval))
 
-    async def _monitor(self, interval):
-        """Safely runs loop"""
+    async def _monitor(self, interval: int):
+        """Safely runs _loop"""
         try:
             await self._loop(interval)
         except asyncio.CancelledError:
@@ -47,7 +47,7 @@ class EventMonitoring:
             logger.exception("Worker crashed with unexpected error.")
 
     async def _loop(self, interval: int) -> None:
-        """Every interval registers all the new events and then sends them via NotificationService"""
+        """Every interval, registers all the new events and then sends them via NotificationService"""
         while self._running:
             try:
                 await self._sent_events()
@@ -62,8 +62,8 @@ class EventMonitoring:
         """Compares the old statuses with the new ones and creates event payload based on model snapshots provided by KubernetesService"""
         cluster_statuses = self._kubernetes_service.get_models_cluster_status()
         for model_data in cluster_statuses:
-            model_id = model_data["name"]
-            current_status = model_data["status"]
+            model_id = model_data.name
+            current_status = model_data.status
 
             previous_status = self._previous_models_status.get(model_id, "Running")
 

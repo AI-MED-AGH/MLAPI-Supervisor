@@ -136,10 +136,32 @@ class ModelListResponse(BaseModel):
     items: list[ModelListItem]
 
 
-class ModelSnapshot(BaseModel):
+class ModelSnapshotEndpoint(BaseModel):
     name: str
     status: str
     replicas: int
+    cpu_usage: str
+
+
+class ModelSnapshot(BaseModel):
+    name: str
+    status: str
+    replicas: ModelReplicas
+    pods: list[PodSnapshot]
+    cpu_usage: str
+
+
+class ModelReplicas(BaseModel):
+    desired: int
+    ready: int
+    available: int
+
+
+class PodSnapshot(BaseModel):
+    name: str
+    phase: str | None
+    state: str | None
+    reason: str | None
     cpu_usage: str
 
 
@@ -147,12 +169,12 @@ class EventPayload(BaseModel):
     event_id: str
     event_type: str
     timestamp: datetime
-    data: dict[str, Any]
+    data: ModelSnapshot
 
     @classmethod
-    def create(cls, event_type: str, snapshot: dict[str, Any]) -> EventPayload:
+    def create(cls, event_type: str, snapshot: ModelSnapshot) -> EventPayload:
         return cls(
-            event_id=f"evt_{uuid.uuid4().hex[:12]}",
+            event_id=f"{uuid.uuid4().hex[:12]}",
             event_type=event_type,
             timestamp=datetime.now(timezone.utc),
             data=snapshot,

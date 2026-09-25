@@ -4,7 +4,7 @@ from app.services.deploy_workflow import (
     DeployWorkflow,
     ModelLockManager,
 )
-from app.services.event_monitoring import EventMonitoring
+from app.services.event_monitor import EventMonitor
 from app.services.ghcr_service import GHCRService
 from app.services.kubernetes_service import DeploymentSpec, KubernetesService
 from app.services.project_registry import (
@@ -19,7 +19,7 @@ __all__ = [
     "DeployRequest",
     "DeployWorkflow",
     "DeploymentSpec",
-    "EventMonitoring",
+    "EventMonitor",
     "GHCRService",
     "InMemoryProjectRegistry",
     "KubernetesService",
