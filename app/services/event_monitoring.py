@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 
 
 class EventMonitoring:
+    """
+    Background worker that scans, every interval, k8 cluster via KubernetesService, checks for changed statuses of models
+    and sends model snapshot via NotificationService to registered webhooks.
+    """
+
     def __init__(
         self,
         kubernetes_service: KubernetesService,
