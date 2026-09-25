@@ -5,9 +5,11 @@ import httpx
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.schemas import EventPayload
 from app.watchman.queries import delete_observers, get_observers_subscribed_to_event
 
 logger = logging.getLogger(__name__)
+
 
 class NotificationService:
     """
@@ -16,11 +18,14 @@ class NotificationService:
     connection_error_max is maximum number of times a webhook may fail to respond before deleting the subsciption. Note that the count resets after a correct connection.
     timeout: duration after which the httpx connection times out
     """
-    def __init__(self, connection_error_max:int=5, timeout:int=5):
+
+    def __init__(self, connection_error_max: int = 5, timeout: int = 5):
         self.timeout = timeout
         self.connection_error_max = connection_error_max
 
-    async def notify(self,session:AsyncSession, event:str, payload:dict)->None:
+    async def notify(
+        self, session: AsyncSession, event: str, payload: EventPayload
+    ) -> None:
         """
         Sends payload to observers subscribed to an event.
         If number of connection errors exceeds connection_error_max, the observer is deleted from the database.
@@ -33,14 +38,18 @@ class NotificationService:
         async with httpx.AsyncClient() as client:
             notifications = []
             for observer in observers:
-                notification = client.post(observer.webhook_url, json=payload, timeout=self.timeout)
+                notification = client.post(
+                    observer.webhook_url, json=payload, timeout=self.timeout
+                )
                 notifications.append(notification)
                 observers_subscribed.append(observer)
 
             results = await asyncio.gather(*notifications, return_exceptions=True)
             for result, observer in zip(results, observers_subscribed):
-                if isinstance(result, Exception) or (isinstance(result, httpx.Response) and not result.is_success):
-                    observer.connection_errors_count+=1
+                if isinstance(result, Exception) or (
+                    isinstance(result, httpx.Response) and not result.is_success
+                ):
+                    observer.connection_errors_count += 1
                     if observer.connection_errors_count > self.connection_error_max:
                         observers_to_delete.append(observer)
                 else:

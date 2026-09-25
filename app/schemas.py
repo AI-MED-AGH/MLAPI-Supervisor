@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import re
+import uuid
+from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, field_validator
+from typing_extensions import Any
 
 _MODEL_ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 
@@ -138,3 +141,19 @@ class ModelSnapshot(BaseModel):
     status: str
     replicas: int
     cpu_usage: str
+
+
+class EventPayload(BaseModel):
+    event_id: str
+    event_type: str
+    timestamp: datetime
+    data: dict[str, Any]
+
+    @classmethod
+    def create(cls, event_type: str, snapshot: dict[str, Any]) -> EventPayload:
+        return cls(
+            event_id=f"evt_{uuid.uuid4().hex[:12]}",
+            event_type=event_type,
+            timestamp=datetime.now(timezone.utc),
+            data=snapshot,
+        )
