@@ -174,7 +174,7 @@ async def test_reject_first_time_model_marks_failed(service, session, notifier):
     model = await service.reject(session, req.id, note="too big")
     await session.commit()
     assert model.state == states.FAILED and "too big" in model.state_detail
-    assert model.pending_digest is None and model.failed_digest == "sha256:a"
+    assert model.pending_digest is None and model.failed_digest is None     # a rejection is not a failed deploy
     assert (await submit(service, session)).action == "noop"   # same digest is not re-requested
     await service._events.drain()
     assert ("approval.rejected", "ecg", "sha256:a") in notifier.events
@@ -186,7 +186,7 @@ async def test_reject_keeps_running_version(service, session):
     req = (await list_requests(session, status=states.REQ_PENDING))[0]
     model = await service.reject(session, req.id)
     assert model.state == states.READY and model.current_digest == "sha256:a"
-    assert model.pending_digest is None and model.failed_digest == "sha256:b"
+    assert model.pending_digest is None and model.failed_digest is None
 
 
 async def test_mode_change_is_refused(service, session):
@@ -203,3 +203,62 @@ async def test_removed_model_can_be_reregistered_from_scratch(service, session):
     model = await get_model_by_name(session, "ecg")
     assert result.action == "approval"
     assert model.state == states.PENDING_APPROVAL and model.approved_resources is None
+
+
+# ───────────── review findings ─────────────
+async def test_an_auto_deploy_supersedes_older_pending_requests(service, session):
+    """A running; B asks for more (pending); C fits the approval and deploys. Approving B later must not roll back to B."""
+    await _running_model(service, session)
+    await submit(service, session, digest="sha256:b", labels=L(R(cpu=4000)))
+    req_b = (await list_requests(session, status=states.REQ_PENDING))[0]
+    result = await submit(service, session, digest="sha256:c")
+    assert result.action == "deploy"
+    model = await get_model_by_name(session, "ecg")
+    assert model.pending_digest is None
+    assert (await get_request(session, req_b.id)).status == states.REQ_SUPERSEDED
+    with pytest.raises(Conflict):
+        await service.approve(session, req_b.id)
+
+
+async def test_a_rejected_digest_is_never_resubmitted_even_after_a_new_one_came_and_went(service, session):
+    await submit(service, session)
+    req = (await list_requests(session, status=states.REQ_PENDING))[0]
+    await service.reject(session, req.id)
+    await session.commit()
+    await submit(service, session, digest="sha256:other", labels=L(R(cpu=500)))
+    assert (await submit(service, session, digest="sha256:a")).action == "noop"
+
+
+async def test_rejecting_a_request_does_not_fail_a_model_that_is_deploying(service, session):
+    await submit(service, session)
+    req = (await list_requests(session, status=states.REQ_PENDING))[0]
+    model, _ = await service.approve(session, req.id)
+    await submit(service, session, digest="sha256:b", labels=L(R(cpu=9000)))
+    req_b = (await list_requests(session, status=states.REQ_PENDING))[0]
+    model.state = states.DEPLOYING                      # the first deploy is running right now
+    await session.commit()
+    await service.reject(session, req_b.id)
+    assert (await get_model_by_name(session, "ecg")).state == states.DEPLOYING
+
+
+async def test_another_package_cannot_claim_an_existing_models_name(service, session):
+    await _running_model(service, session)
+    with pytest.raises(Conflict, match="belongs to"):
+        await service.submit_digest(session, name="ecg", image="ghcr.io/org/evil-package", digest="sha256:evil",
+                                    labels=L(R(cpu=100)), source="ghcr")
+    model = await get_model_by_name(session, "ecg")
+    assert model.image == "ghcr.io/org/ecg" and model.pending_digest is None
+    assert await list_requests(session, status=states.REQ_PENDING) == []
+
+
+async def test_a_model_cannot_switch_between_ghcr_and_local_sources(service, session):
+    await _running_model(service, session)
+    with pytest.raises(Conflict):
+        await service.submit_digest(session, name="ecg", image="ecg-local:1", digest="sha256:l", labels=L(), source="local")
+
+
+async def test_a_local_model_may_change_its_tag(service, session):
+    await service.submit_digest(session, name="ecg", image="ecg-local:1", digest="sha256:l1", labels=L(), source="local")
+    result = await service.submit_digest(session, name="ecg", image="ecg-local:2", digest="sha256:l2", labels=L(), source="local")
+    assert result.action == "approval"
+    assert (await get_model_by_name(session, "ecg")).image == "ecg-local:2"
