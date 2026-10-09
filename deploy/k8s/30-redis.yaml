@@ -1,0 +1,42 @@
+# Create the password first:
+#   kubectl -n mlapi-system create secret generic mlapi-redis --from-literal=password="$(openssl rand -hex 24)"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlapi-redis
+  namespace: mlapi-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mlapi-redis}
+  template:
+    metadata:
+      labels: {app: mlapi-redis}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: redis
+          image: redis:7.4-alpine
+          # persistence is off on purpose: queued payloads may be sensitive, and the Supervisor rebuilds routes and keys
+          args: ["--requirepass", "$(REDIS_PASSWORD)", "--save", "", "--appendonly", "no"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: mlapi-redis, key: password}}
+          ports: [{containerPort: 6379}]
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 999
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlapi-redis
+  namespace: mlapi-system
+spec:
+  selector: {app: mlapi-redis}
+  ports: [{port: 6379, targetPort: 6379}]

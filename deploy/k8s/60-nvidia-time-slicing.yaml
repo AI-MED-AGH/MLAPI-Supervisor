@@ -1,0 +1,19 @@
+# Only needed on nodes with a GPU. Lets one physical GPU be shared by up to 4 model pods (no VRAM isolation:
+# model authors cap their own usage with gpu_memory_fraction). Pass this file to the NVIDIA device plugin, e.g.
+#   helm upgrade -i nvdp nvdp/nvidia-device-plugin -n nvidia-device-plugin --create-namespace \
+#     --set config.name=nvidia-time-slicing --set gfd.enabled=true
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nvidia-time-slicing
+  namespace: nvidia-device-plugin
+data:
+  any: |-
+    version: v1
+    flags:
+      migStrategy: none
+    sharing:
+      timeSlicing:
+        resources:
+          - name: nvidia.com/gpu
+            replicas: 4

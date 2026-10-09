@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mlapi-system
+  labels:
+    mlapi/role: system
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mlapi-models
+  labels:
+    mlapi/role: models
+    pod-security.kubernetes.io/enforce: baseline

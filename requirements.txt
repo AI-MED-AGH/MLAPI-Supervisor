@@ -9,3 +9,4 @@ pydantic-settings>=2.3
 redis>=5.0
 alembic>=1.13
 docker>=7.1
+kubernetes_asyncio>=30.0

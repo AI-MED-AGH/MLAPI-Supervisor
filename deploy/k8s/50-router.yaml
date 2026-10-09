@@ -1,0 +1,40 @@
+# The Router is the only component exposed to clients. Put an Ingress with TLS in front of this Service.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlapi-router
+  namespace: mlapi-system
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: mlapi-router}
+  template:
+    metadata:
+      labels: {app: mlapi-router}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: router
+          image: ghcr.io/ai-med-agh/ml-api:latest
+          env:
+            - name: REDIS_URL
+              valueFrom: {secretKeyRef: {name: mlapi-supervisor-env, key: REDIS_URL}}
+          ports: [{containerPort: 8000}]
+          readinessProbe: {httpGet: {path: /health, port: 8000}}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlapi-router
+  namespace: mlapi-system
+spec:
+  type: ClusterIP
+  selector: {app: mlapi-router}
+  ports: [{port: 80, targetPort: 8000}]

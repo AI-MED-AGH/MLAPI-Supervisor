@@ -19,6 +19,10 @@ class Settings(BaseSettings):
     docker_network: str = "mlapi-models"
     docker_publish_ports: bool = False  # dev: publish model ports on 127.0.0.1 (Supervisor/Router run on the host)
     router_selector: str = "app=mlapi-router"
+    supervisor_selector: str = "app=mlapi-supervisor"
+    redis_selector: str = "app=mlapi-redis"
+    k8s_image_pull_secret: str | None = "ghcr-pull"
+    kubeconfig: str | None = None
 
     ghcr_org: str | None = None
     ghcr_token: str | None = None

@@ -1,0 +1,62 @@
+# Create the environment secret first (see docs/runbook.md):
+#   kubectl -n mlapi-system create secret generic mlapi-supervisor-env \
+#     --from-literal=ADMIN_API_KEYS=<sha256 of your admin key> --from-literal=GHCR_TOKEN=<read:packages token> \
+#     --from-literal=REDIS_URL=redis://:<password>@mlapi-redis:6379/0 --from-literal=REDIS_ADMIN_URL=redis://:<password>@mlapi-redis:6379/0
+# The Supervisor is reachable inside the cluster only: reach it with `kubectl port-forward`, never an Ingress.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlapi-supervisor
+  namespace: mlapi-system
+spec:
+  replicas: 1
+  strategy: {type: Recreate}   # exactly one instance at a time
+  selector:
+    matchLabels: {app: mlapi-supervisor}
+  template:
+    metadata:
+      labels: {app: mlapi-supervisor}
+    spec:
+      serviceAccountName: mlapi-supervisor
+      containers:
+        - name: supervisor
+          image: ghcr.io/ai-med-agh/mlapi-supervisor:latest
+          envFrom:
+            - secretRef: {name: mlapi-supervisor-env}
+          env:
+            - {name: CLUSTER_BACKEND, value: kubernetes}
+            - {name: K8S_NAMESPACE, value: mlapi-models}
+            - {name: GHCR_ORG, value: AI-MED-AGH}
+            - {name: DATA_DIR, value: /data}
+          ports: [{containerPort: 8000}]
+          readinessProbe: {httpGet: {path: /health, port: 8000}}
+          volumeMounts: [{name: data, mountPath: /data}]
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 1Gi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: {drop: ["ALL"]}
+      volumes:
+        - name: data
+          persistentVolumeClaim: {claimName: mlapi-supervisor-data}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mlapi-supervisor-data
+  namespace: mlapi-system
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources: {requests: {storage: 1Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlapi-supervisor
+  namespace: mlapi-system
+spec:
+  type: ClusterIP
+  selector: {app: mlapi-supervisor}
+  ports: [{port: 8000, targetPort: 8000}]
