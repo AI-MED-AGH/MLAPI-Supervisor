@@ -113,7 +113,7 @@ async def test_queue_mode_creates_api_and_stopped_worker(backend, docker_client)
     assert api.kwargs["nano_cpus"] == 100_000_000 and not api.kwargs.get("device_requests")
     assert "volumes" not in api.kwargs or not api.kwargs["volumes"]
     assert worker.kwargs["nano_cpus"] == 1_500_000_000 and worker.kwargs["device_requests"]
-    assert worker.kwargs["stop_timeout"] == 900
+    assert worker.kwargs["labels"]["mlapi.max_job_seconds"] == "900"
     assert await backend.endpoint("ecg") == "http://mlapi-m-ecg-api:8000"
 
 
@@ -244,3 +244,12 @@ async def test_the_unenforceable_disk_limit_is_logged(backend, caplog):
     with caplog.at_level("WARNING"):
         await backend.apply_model(spec())
     assert "disk" in caplog.text.lower() and "not enforced" in caplog.text.lower()
+
+
+async def test_stopping_a_worker_gives_it_time_to_finish_its_job(backend, docker_client):
+    await backend.apply_model(spec(mode="queue", max_job_seconds=900))
+    await backend.scale("ecg", 1, role="worker")
+    await backend.scale("ecg", 0, role="worker")
+    assert ("mlapi-m-ecg-worker", 900) in docker_client.stop_calls
+    await backend.scale("ecg", 0)                                  # the API is stopped quickly
+    assert docker_client.stop_calls[-1] == ("mlapi-m-ecg-api", 10)

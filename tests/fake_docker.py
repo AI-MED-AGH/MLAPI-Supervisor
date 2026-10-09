@@ -43,7 +43,15 @@ class _Containers:
     def __init__(self, client):
         self._c = client
 
+    # keyword arguments docker-py's high-level containers.create() really accepts (a subset, but the ones we use)
+    ACCEPTED = {"name", "environment", "labels", "network", "nano_cpus", "mem_limit", "memswap_limit", "restart_policy",
+                "security_opt", "cap_drop", "pids_limit", "volumes", "device_requests", "ports", "user", "command",
+                "detach", "tty", "working_dir", "read_only", "tmpfs", "cap_add", "entrypoint", "hostname"}
+
     def create(self, image, **kwargs):
+        unknown = set(kwargs) - self.ACCEPTED
+        if unknown:
+            raise TypeError(f"create() got an unexpected keyword argument {sorted(unknown)[0]!r}")
         name = kwargs["name"]
         if name in self._c.container_map:
             raise docker.errors.APIError("Conflict. The container name is already in use")

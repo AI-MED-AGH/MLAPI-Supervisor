@@ -131,7 +131,8 @@ class DockerBackend:
         if gpu:
             kwargs["device_requests"] = [DeviceRequest(count=1, capabilities=[["gpu"]])]
         if fastmlapi_role == "worker":
-            kwargs["stop_timeout"] = spec.max_job_seconds
+            # docker-py's create() has no stop_timeout: remember the grace period, and stop() passes it explicitly
+            kwargs["labels"]["mlapi.max_job_seconds"] = str(spec.max_job_seconds)
         return self.client.containers.create(spec.image, **kwargs)
 
     def _replace(self, container_name: str, grace_seconds: int = 10) -> bool:
@@ -186,7 +187,8 @@ class DockerBackend:
             raise BackendError(f"no {role} container for model {name!r}")
         if replicas <= 0:
             if container.status == "running":
-                container.stop()
+                grace = int((container.labels or {}).get("mlapi.max_job_seconds", 10)) if role == "worker" else 10
+                container.stop(timeout=grace)
         elif container.status != "running":
             container.start()
 
