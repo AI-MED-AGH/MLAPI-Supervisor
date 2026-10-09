@@ -17,6 +17,7 @@ class Background:
         if poller is not None:
             self._loops.append(("ghcr-poller", poller.tick, settings.poll_interval))
         self._wake = wake
+        self._poller = poller
 
     async def _periodic(self, name: str, tick, interval: float) -> None:
         while True:
@@ -49,6 +50,8 @@ class Background:
             task.cancel()
         await asyncio.gather(*self._tasks, return_exceptions=True)
         self._tasks.clear()
+        if self._poller is not None and hasattr(self._poller, "aclose"):
+            await self._poller.aclose()
 
 
 def build_background(services, state) -> "Background":
