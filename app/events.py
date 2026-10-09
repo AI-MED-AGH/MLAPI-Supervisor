@@ -54,3 +54,5 @@ class EventBus:
         """Wait for in-flight deliveries (used in tests and on shutdown)."""
         while self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
+            # finished tasks are only discarded by a loop callback; make sure it gets to run
+            await asyncio.sleep(0)
