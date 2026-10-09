@@ -128,3 +128,16 @@ their own usage (`gpu_memory_fraction` in `fastmlapi`). A model that needs a GPU
 | Model `failed` with "identity check failed" | The image's `/info` reports a different `name` than its `mlapi.model.name` label |
 | Model `failed` with "timed out" | It did not report `model_loaded` in time; weights may be downloading slowly. Raise `DEPLOY_TIMEOUT` |
 | Queue-mode model `failed`: "QUEUE_ACL_SECRET" | Set `QUEUE_ACL_SECRET` and redeploy |
+
+
+## 6. Known limits (read before exposing this to people you don't trust)
+
+* **Queue-mode (long-running job) models share a Redis with each other, not with the platform.** A model can list the *names*
+  of the other queue models' keys and can hang that Redis with a script; it can never read other models' data or touch routes
+  and API keys, which live on the control Redis. The Supervisor will not start a queue-mode model unless `QUEUE_REDIS_URL`
+  points at that separate instance. If a queue model misbehaves, restart the queue Redis.
+* **Docker installs:** model containers can reach each other, and the Supervisor holds the Docker socket (root on the host).
+* **GPU memory is shared**, not isolated.
+* **Disk limits are not enforced on Docker** (they are sized into the cache volume on Kubernetes).
+* `fastmlapi`'s queue mode currently relies on a grace period instead of worker heartbeats (a worker that never reports is
+  trusted after 10 s of running).
