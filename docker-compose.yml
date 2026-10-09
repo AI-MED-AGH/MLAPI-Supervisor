@@ -1,36 +1,64 @@
+# The whole platform on one machine: Router + Supervisor + Redis. Models run as sibling containers on this
+# host's Docker engine. Only the Router and the (localhost-only) Supervisor admin API publish ports.
+#
+#   cp .env.example .env      # then fill it in (see docs/runbook.md)
+#   docker compose up -d --build
+#
+# The Router is built from the sibling ../ML-API checkout.
 services:
-  db:
-    image: postgres:15-alpine
-    container_name: subscriptions
-    restart: always
-    ports:
-      - "${POSTGRES_PORT}:5432"
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=${POSTGRES_DB}
-      - PYTHONUNBUFFERED=1
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    # persistence is off on purpose: queued payloads may be sensitive, and routes/keys are rebuilt from the database
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}", "--save", "", "--appendonly", "no"]
+    networks: [models]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
       interval: 5s
-      timeout: 5s
-      retries: 5
-
-  api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: mlapi-supervisor-api
-    restart: always
-    ports:
-      - "8000:8000"
+      timeout: 3s
+      retries: 10
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+  supervisor:
+    build: .
+    image: mlapi-supervisor:local
+    restart: unless-stopped
     depends_on:
-      db:
-        condition: service_healthy
+      redis: {condition: service_healthy}
+    environment:
+      CLUSTER_BACKEND: docker
+      DOCKER_NETWORK: mlapi-models
+      DATA_DIR: /data
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      MODEL_REDIS_URL: redis://redis:6379/0
+      ADMIN_API_KEYS: ${ADMIN_API_KEYS:?set ADMIN_API_KEYS in .env (python -m app.admin_key)}
+      QUEUE_ACL_SECRET: ${QUEUE_ACL_SECRET:-}
+      GHCR_ORG: ${GHCR_ORG:-}
+      GHCR_TOKEN: ${GHCR_TOKEN:-}
+      DATABASE_URL: ${DATABASE_URL:-}
+    volumes:
+      - supervisor_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock   # root-equivalent on this host: run only on a trusted device
+    ports:
+      - "127.0.0.1:${SUPERVISOR_PORT:-8001}:8000"     # admin API, localhost only
+    networks: [models]
+
+  router:
+    build: ../ML-API
+    image: mlapi-router:local
+    restart: unless-stopped
+    depends_on:
+      redis: {condition: service_healthy}
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    ports:
+      - "${ROUTER_BIND:-127.0.0.1}:${ROUTER_PORT:-8000}:8000"
+    networks: [models]
 
 volumes:
-  postgres_data:
+  supervisor_data:
+
+networks:
+  models:
+    name: mlapi-models

@@ -1,0 +1,27 @@
+# Optional: use Postgres instead of the default SQLite file.
+#   docker compose -f docker-compose.yml -f docker-compose.postgres.yml up -d --build
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-supervisor}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [models]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-supervisor}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  supervisor:
+    depends_on:
+      db: {condition: service_healthy}
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-supervisor}
+
+volumes:
+  postgres_data:

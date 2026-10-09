@@ -37,10 +37,19 @@ async def test_user_is_limited_to_the_models_key_prefix_and_safe_commands():
     assert [r for r in rules if r.startswith("~")] == ["~fastmlapi:ecg:*"]      # exactly one key pattern
     assert "resetchannels" in rules and not any(r.startswith("&") for r in rules)  # no pub/sub channels
     assert rules.index("-@all") < rules.index("+@list")                          # deny everything, then allow
-    for denied in ("-keys", "-scan"):
-        assert rules.index("+@keyspace") < rules.index(denied)
-    for dangerous in ("+@admin", "+@dangerous", "+@scripting", "+@pubsub", "+@all", "+flushall", "+config", "+acl"):
+    for dangerous in ("+@admin", "+@dangerous", "+@scripting", "+@pubsub", "+@all", "+@keyspace", "+@connection",
+                      "+flushall", "+flushdb", "+swapdb", "+config", "+acl", "+keys", "+scan", "+eval", "+shutdown", "+debug"):
         assert dangerous not in rules
+
+
+def test_only_data_structure_categories_and_named_commands_are_granted():
+    """Categories can hide key-less destructive commands (@keyspace contains FLUSHALL), so only these are allowed."""
+    from app.queue_access.acl import MODEL_COMMANDS
+
+    categories = {r for r in MODEL_COMMANDS if r.startswith("+@")}
+    assert categories == {"+@list", "+@hash", "+@string", "+@set", "+@sortedset"}
+    named = {r for r in MODEL_COMMANDS if r.startswith("+") and not r.startswith("+@")}
+    assert not named & {"+flushall", "+flushdb", "+swapdb", "+keys", "+scan", "+randomkey", "+move", "+rename", "+dbsize", "+info"}
 
 
 async def test_returned_url_points_at_the_model_redis_with_the_model_user():

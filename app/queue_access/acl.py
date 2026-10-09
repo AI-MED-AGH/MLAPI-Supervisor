@@ -10,13 +10,15 @@ logger = logging.getLogger(__name__)
 _NAME_RE = re.compile(r"[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?")
 
 # Everything fastmlapi's queue needs (lists, hashes, key expiry) and nothing that touches other keys or the server.
-# If a new fastmlapi release needs more commands, extend this list deliberately.
-MODEL_COMMANDS = [
-    "-@all",
-    "+@list", "+@hash", "+@string", "+@set", "+@sortedset", "+@keyspace",
-    "-keys", "-scan", "-randomkey",  # a model must not be able to enumerate other models' keys
-    "+ping", "+hello", "+auth", "+echo", "+client|setname", "+client|setinfo", "+client|id",
+# Do NOT grant whole categories such as @keyspace or @dangerous: @keyspace contains FLUSHALL, FLUSHDB and SWAPDB,
+# which take no key argument and so escape the `~fastmlapi:<name>:*` restriction. If a new fastmlapi release needs
+# more commands, add them here one by one.
+DATA_CATEGORIES = ["+@list", "+@hash", "+@string", "+@set", "+@sortedset"]
+KEY_COMMANDS = [
+    "+del", "+unlink", "+exists", "+expire", "+pexpire", "+expireat", "+pexpireat", "+persist", "+ttl", "+pttl", "+type",
 ]
+CONNECTION_COMMANDS = ["+ping", "+hello", "+auth", "+echo", "+client|setname", "+client|setinfo", "+client|id"]
+MODEL_COMMANDS = ["-@all", *DATA_CATEGORIES, *KEY_COMMANDS, *CONNECTION_COMMANDS]
 
 
 class QueueAccessError(Exception):
