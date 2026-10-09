@@ -33,6 +33,20 @@ class Env:
     pass
 
 
+class FakeQueueAccess:
+    """Stands in for the Redis ACL manager in tests that are not about ACLs."""
+
+    def __init__(self):
+        self.provisioned, self.removed = [], []
+
+    async def provision(self, name):
+        self.provisioned.append(name)
+        return f"redis://m_{name}:pw@fake-redis:6379/0"
+
+    async def remove(self, name):
+        self.removed.append(name)
+
+
 def build_env(sessionmaker, redis):
     e = Env()
     e.settings = Settings(_env_file=None, cluster_backend="fake", deploy_timeout=1.5,
@@ -42,7 +56,8 @@ def build_env(sessionmaker, redis):
     e.events = EventBus(sessionmaker, e.notifier)
     e.registry = RegistryService(e.events)
     e.deployer = Deployer(sessionmaker=sessionmaker, backend=e.backend, redis=redis,
-                          events=e.events, probe=e.probe, settings=e.settings)
+                          events=e.events, probe=e.probe, settings=e.settings,
+                          queue_access=FakeQueueAccess())
     return e
 
 

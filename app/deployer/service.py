@@ -6,6 +6,7 @@ import time
 from app.cluster.backend import BackendError, ClusterBackend, ModelSpec
 from app.config import Settings
 from app.events import EventBus
+from app.queue_access.acl import QueueAccessError
 from app.redis_sync.routes import delete_route, delete_schema, publish_route, publish_schema
 from app.registry import states
 from app.registry.errors import Conflict, Invalid
@@ -118,8 +119,13 @@ class Deployer:
         image = f"{model.image}@{digest}" if model.source == "ghcr" else digest
         config = model.config or {}
         queue_url = None
-        if model.mode == "queue" and self._queue_access is not None:
-            queue_url = await self._queue_access.provision(model.name)
+        if model.mode == "queue":
+            if self._queue_access is None:
+                raise DeployFailed("queue-mode models need QUEUE_ACL_SECRET to be configured")
+            try:
+                queue_url = await self._queue_access.provision(model.name)
+            except QueueAccessError as exc:
+                raise DeployFailed(str(exc)) from exc
         return ModelSpec(
             name=model.name,
             image=image,

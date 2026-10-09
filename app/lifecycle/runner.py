@@ -70,7 +70,8 @@ def build_background(services, state) -> "Background":
     return Background(
         reaper=IdleReaper(sessionmaker=sm, deployer=deployer, redis=redis, settings=settings),
         scaler=QueueScaler(sessionmaker=sm, deployer=deployer, redis=redis, backend=services.backend, settings=settings),
-        reconciler=Reconciler(sessionmaker=sm, deployer=deployer, redis=redis, backend=services.backend, probe=services.probe),
+        reconciler=Reconciler(sessionmaker=sm, deployer=deployer, redis=redis, backend=services.backend, probe=services.probe,
+                              queue_access=services.queue_access),
         wake=WakeConsumer(sessionmaker=sm, deployer=deployer, redis=redis),
         poller=poller,
         settings=settings,

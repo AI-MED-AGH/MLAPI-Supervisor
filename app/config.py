@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     database_url: str | None = None
     redis_url: str = "redis://localhost:6379/0"
     redis_admin_url: str | None = None
+    model_redis_url: str | None = None  # how model containers reach Redis (defaults to redis_url's host)
+    queue_acl_secret: str = ""
     admin_api_keys: str = ""
     auto_migrate: bool = True
 

@@ -21,12 +21,13 @@ def desired_route_state(state: str, mode: str) -> str | None:
 class Reconciler:
     """Makes the cluster and Redis match the database: heals drift, restores routes, removes orphans."""
 
-    def __init__(self, *, sessionmaker, deployer, redis, backend, probe):
+    def __init__(self, *, sessionmaker, deployer, redis, backend, probe, queue_access=None):
         self._sm = sessionmaker
         self._deployer = deployer
         self._redis = redis
         self._backend = backend
         self._probe = probe
+        self._queue_access = queue_access
 
     async def tick(self) -> None:
         async with self._sm() as session:
@@ -62,6 +63,11 @@ class Reconciler:
             if not runtime.exists:
                 await self._heal_missing_workload(model)
                 return
+        if model.mode == "queue" and self._queue_access is not None and model.current_digest:
+            try:  # idempotent: restores the ACL user after a Redis restart
+                await self._queue_access.provision(model.name)
+            except Exception:
+                logger.warning("Could not refresh the queue ACL user for %s", model.name)
         wanted = desired_route_state(model.state, model.mode)
         if wanted is None:
             return
