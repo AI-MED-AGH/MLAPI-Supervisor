@@ -1,31 +1,49 @@
 from contextlib import asynccontextmanager
 
+import redis.asyncio as aioredis
 from fastapi import FastAPI
 
-from app.watchman import Base, engine, watchmanRouter
+from app.config import Settings, get_settings
+from app.db import Base, engine
+from app.watchman import watchmanRouter
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
+def create_app(settings: Settings | None = None, *, redis=None) -> FastAPI:
+    settings = settings or get_settings()
 
-app = FastAPI(
-    title="MLAPI Supervisor",
-    description="Supervisor controlling ML model instances",
-    version="0.1.0",
-    lifespan=lifespan,
-)
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        owned = []
+        if app.state.redis is None:
+            app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+            owned.append(app.state.redis.aclose)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        try:
+            yield
+        finally:
+            for close in owned:
+                await close()
+
+    app = FastAPI(
+        title="MLAPI Supervisor",
+        description="Supervisor controlling ML model instances",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
+    app.state.settings = settings
+    app.state.redis = redis
+
+    @app.get("/")
+    def root() -> dict[str, str]:
+        return {"message": "Welcome to MLAPI Supervisor"}
+
+    @app.get("/health")
+    def health_check() -> dict[str, str]:
+        return {"status": "ok"}
+
+    app.include_router(watchmanRouter, prefix="/observers")
+    return app
 
 
-@app.get("/")
-def root() -> dict[str, str]:
-    return {"message": "Welcome to MLAPI Supervisor"}
-
-
-@app.get("/health")
-def health_check() -> dict[str, str]:
-    return {"status": "ok"}
-
-app.include_router(watchmanRouter, prefix="/observers")
+app = create_app()
