@@ -38,6 +38,7 @@ async def redis():
 async def db_engine():
     from app.db import Base
     import app.keys.tables  # noqa: F401  (register tables)
+    import app.registry.tables  # noqa: F401
     import app.watchman.tables  # noqa: F401
 
     engine = create_async_engine(
