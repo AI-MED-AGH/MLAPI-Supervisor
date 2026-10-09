@@ -5,12 +5,14 @@ from fastapi import Depends, FastAPI
 
 from app.auth import require_admin
 from app.config import Settings, get_settings
-from app.db import Base, engine
+from app.db import SessionLocal
 from app.keys.api import router as keys_router
+from app.migrate import upgrade_to_head
+from app.redis_sync.keys import rebuild_keys
 from app.watchman import watchmanRouter
 
 
-def create_app(settings: Settings | None = None, *, redis=None) -> FastAPI:
+def create_app(settings: Settings | None = None, *, redis=None, sessionmaker=None) -> FastAPI:
     settings = settings or get_settings()
 
     @asynccontextmanager
@@ -19,9 +21,11 @@ def create_app(settings: Settings | None = None, *, redis=None) -> FastAPI:
         if app.state.redis is None:
             app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
             owned.append(app.state.redis.aclose)
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
         try:
+            if settings.auto_migrate:
+                await upgrade_to_head(settings.db_url)
+            async with app.state.sessionmaker() as session:
+                await rebuild_keys(app.state.redis, session)
             yield
         finally:
             for close in owned:
@@ -35,6 +39,7 @@ def create_app(settings: Settings | None = None, *, redis=None) -> FastAPI:
     )
     app.state.settings = settings
     app.state.redis = redis
+    app.state.sessionmaker = sessionmaker or SessionLocal
 
     @app.get("/")
     def root() -> dict[str, str]:
