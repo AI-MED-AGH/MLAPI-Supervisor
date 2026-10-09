@@ -1,0 +1,44 @@
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    data_dir: str = "./data"
+    database_url: str | None = None
+    redis_url: str = "redis://localhost:6379/0"
+    redis_admin_url: str | None = None
+    admin_api_keys: str = ""
+    auto_migrate: bool = True
+
+    cluster_backend: str = "docker"  # docker | kubernetes | fake
+    k8s_namespace: str = "mlapi-models"
+    storage_class: str | None = None
+    docker_network: str = "mlapi-models"
+    router_selector: str = "app=mlapi-router"
+
+    ghcr_org: str | None = None
+    ghcr_token: str | None = None
+    poll_interval: int = 300
+    deploy_timeout: int = 1800
+    reconcile_interval: int = 60
+    queue_poll_interval: int = 5
+    default_idle_timeout: int = 900
+    api_cpu_m: int = 100
+    api_memory_bytes: int = 256 * 1024 * 1024
+    log_level: str = "INFO"
+
+    @property
+    def db_url(self) -> str:
+        return self.database_url or f"sqlite+aiosqlite:///{self.data_dir}/supervisor.db"
+
+    @property
+    def admin_hashes(self) -> set[str]:
+        return {h.strip().lower() for h in self.admin_api_keys.split(",") if h.strip()}
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
