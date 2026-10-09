@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     supervisor_selector: str = "app=mlapi-supervisor"
     redis_selector: str = "app=mlapi-queue-redis"  # what queue-mode pods may reach
     k8s_image_pull_secret: str | None = "ghcr-pull"
+    k8s_ephemeral_storage: str = "2Gi"  # per-container scratch space (writable layer, /tmp)
     kubeconfig: str | None = None
 
     ghcr_org: str | None = None

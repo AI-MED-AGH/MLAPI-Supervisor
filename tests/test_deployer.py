@@ -278,7 +278,10 @@ async def test_rollback_without_previous_and_redeploy_without_anything(env):
     "patch",
     [{"env": {"lower": "x"}}, {"env": {"FASTMLAPI_ROLE": "worker"}}, {"env": {"MLAPI_X": "1"}},
      {"env": {"A": 1}}, {"env": []}, {"secret_refs": ["Bad Name"]}, {"idle_timeout_s": -1},
-     {"idle_timeout_s": True}, {"max_job_seconds": 0}, {"nope": 1}, {"env": {"A\n": "x"}}],
+     {"idle_timeout_s": True}, {"max_job_seconds": 0}, {"nope": 1}, {"env": {"A\n": "x"}},
+     {"env": {"NVIDIA_VISIBLE_DEVICES": "all"}}, {"env": {"CUDA_VISIBLE_DEVICES": "0"}},
+     {"secret_refs": ["ghcr-pull"]}, {"secret_refs": ["mlapi-redis"]}, {"secret_refs": ["mlapi-supervisor-env"]},
+     {"secret_refs": ["kube-root-ca.crt"]}],
 )
 async def test_config_validation(env, patch):
     await make_model(env)
@@ -446,3 +449,27 @@ async def test_a_failed_scale_down_leaves_the_model_ready(env):
             await env.deployer.sleep(s, model)
         await s.commit()
     assert (await get(env)).state == states.READY
+
+
+async def test_a_config_change_does_not_forget_a_known_bad_digest(env):
+    await _ready_model(env)
+    async with env.sm() as s:
+        model = await get_model_by_name(s, "ecg")
+        model.failed_digest = "sha256:bad"
+        await s.flush()
+        assert await env.deployer.update_config(s, model, {"env": {"HF_TOKEN": "x"}}) is True
+        assert model.failed_digest == "sha256:bad"
+        await s.commit()
+
+
+async def test_shutdown_cancels_running_deploys_without_errors(env):
+    env.backend.never_ready = {"ghcr.io/org/ecg@sha256:a"}
+    env.settings.deploy_timeout = 60
+    mid = await make_model(env)
+    async with env.sm() as s:
+        await env.deployer.begin(s, await get_model(s, mid), "sha256:a")
+        await s.commit()
+    task = env.deployer.spawn(mid, "sha256:a")
+    await asyncio.sleep(0.1)
+    await asyncio.wait_for(env.deployer.shutdown(), 5)
+    assert task.done()

@@ -30,9 +30,9 @@ def upgrade() -> None:
     sa.Column('approved_resources', sa.JSON(), nullable=True),
     sa.Column('requested_resources', sa.JSON(), nullable=True),
     sa.Column('config', sa.JSON(), nullable=False),
-    sa.Column('created_at', sa.Integer(), nullable=False),
-    sa.Column('updated_at', sa.Integer(), nullable=False),
-    sa.Column('last_checked_at', sa.Integer(), nullable=True),
+    sa.Column('created_at', sa.BigInteger(), nullable=False),
+    sa.Column('updated_at', sa.BigInteger(), nullable=False),
+    sa.Column('last_checked_at', sa.BigInteger(), nullable=True),
     sa.PrimaryKeyConstraint('id')
     )
     with op.batch_alter_table('models', schema=None) as batch_op:
@@ -44,8 +44,8 @@ def upgrade() -> None:
     sa.Column('digest', sa.String(), nullable=False),
     sa.Column('status', sa.String(), nullable=False),
     sa.Column('reason', sa.String(), nullable=True),
-    sa.Column('started_at', sa.Integer(), nullable=False),
-    sa.Column('finished_at', sa.Integer(), nullable=True),
+    sa.Column('started_at', sa.BigInteger(), nullable=False),
+    sa.Column('finished_at', sa.BigInteger(), nullable=True),
     sa.ForeignKeyConstraint(['model_id'], ['models.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
@@ -59,9 +59,9 @@ def upgrade() -> None:
     sa.Column('requested', sa.JSON(), nullable=False),
     sa.Column('status', sa.String(), nullable=False),
     sa.Column('decided_by', sa.String(), nullable=True),
-    sa.Column('decided_at', sa.Integer(), nullable=True),
+    sa.Column('decided_at', sa.BigInteger(), nullable=True),
     sa.Column('note', sa.String(), nullable=True),
-    sa.Column('created_at', sa.Integer(), nullable=False),
+    sa.Column('created_at', sa.BigInteger(), nullable=False),
     sa.ForeignKeyConstraint(['model_id'], ['models.id'], ),
     sa.PrimaryKeyConstraint('id')
     )

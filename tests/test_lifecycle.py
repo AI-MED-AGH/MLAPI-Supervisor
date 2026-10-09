@@ -363,3 +363,25 @@ async def test_reconciler_does_not_delete_a_workload_whose_model_was_created_dur
     monkeypatch.setattr(env.backend, "list_models", racing)
     await reconciler(env).tick()
     assert "newbie" in env.backend.models and await env.redis.exists("route:newbie") == 1
+
+
+async def test_a_key_revoked_while_the_reconciler_was_publishing_does_not_stay_valid(env, monkeypatch):
+    """Revocation race: the reconciler read the key as valid, then an admin revoked it, then the stale record was written."""
+    import app.redis_sync.keys as keys_module
+    from app.keys.queries import create_key, get_key, revoke_key
+
+    async with env.sm() as s:
+        key, _ = await create_key(s, name="k", allowed_models=["ecg"], allow_all=False, expires_at=None)
+        await s.commit()
+    original = keys_module.publish_key
+
+    async def revoked_just_before_the_write(redis, k, now=None):
+        async with env.sm() as other:                           # the admin's request commits ...
+            await revoke_key(other, await get_key(other, k.id))
+            await other.commit()
+        await redis.delete(f"key:{k.id}")                         # ... and deletes the Redis entry ...
+        await original(redis, k, now)                             # ... and then the stale snapshot is written back
+
+    monkeypatch.setattr(keys_module, "publish_key", revoked_just_before_the_write)
+    await reconciler(env).tick()
+    assert await env.redis.exists(f"key:{key.id}") == 0

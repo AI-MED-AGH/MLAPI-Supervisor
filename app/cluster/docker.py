@@ -99,8 +99,10 @@ class DockerBackend:
             raise BackendError(f"could not pull image: {exc}") from exc
 
     def _create(self, spec: ModelSpec, *, container: str, role: str, fastmlapi_role: str, resources, gpu: bool, cache: bool):
-        env = dict(spec.env)
+        env = {k: v for k, v in spec.env.items() if not k.startswith(("NVIDIA_", "CUDA_"))}
         env["FASTMLAPI_ROLE"] = fastmlapi_role  # platform variables always win over model-supplied ones
+        if not gpu:
+            env["NVIDIA_VISIBLE_DEVICES"] = "void"  # an image's default (=all) must not expose GPUs that were not approved
         if cache:
             env["FASTMLAPI_CACHE_DIR"] = "/cache"
             env["HF_HOME"] = "/cache/hf"
@@ -132,18 +134,25 @@ class DockerBackend:
             kwargs["stop_timeout"] = spec.max_job_seconds
         return self.client.containers.create(spec.image, **kwargs)
 
-    def _replace(self, container_name: str) -> bool:
-        """Removes an existing container; returns whether it was running."""
+    def _replace(self, container_name: str, grace_seconds: int = 10) -> bool:
+        """Removes an existing container (stopping a running one gracefully first); returns whether it was running."""
         existing = self._get(container_name)
         if existing is None:
             return False
         was_running = existing.status == "running"
+        if was_running:
+            existing.stop(timeout=grace_seconds)  # a queue worker gets time to finish its current job
         existing.remove(force=True)
         return was_running
 
     def _apply(self, spec: ModelSpec) -> None:
         if spec.secret_refs:
             logger.warning("Docker backend has no secret store; secret_refs %s are ignored", list(spec.secret_refs))
+        if spec.resources.disk_bytes:
+            logger.warning(
+                "Docker cannot enforce the approved disk size (%s bytes) for %s; the limit is not enforced here",
+                spec.resources.disk_bytes, spec.name,
+            )
         self._ensure_network()
         self._ensure_image(spec.image)
         self._ensure_volume(f"{_base(spec.name)}-cache", spec.name)
@@ -155,7 +164,7 @@ class DockerBackend:
             api = self._create(spec, container=f"{base}-api", role="main", fastmlapi_role="api",
                                resources=api_resources, gpu=False, cache=False)
             api.start()
-            worker_was_running = self._replace(f"{base}-worker")
+            worker_was_running = self._replace(f"{base}-worker", grace_seconds=spec.max_job_seconds)
             worker = self._create(spec, container=f"{base}-worker", role="worker", fastmlapi_role="worker",
                                   resources=spec.resources, gpu=spec.resources.gpu, cache=True)
             if worker_was_running:

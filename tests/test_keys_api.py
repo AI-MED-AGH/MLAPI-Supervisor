@@ -139,3 +139,23 @@ async def test_redis_failure_on_revoke_keeps_key_active(api, redis, monkeypatch)
     assert r.status_code == 503
     monkeypatch.undo()
     assert (await api.get("/v1/keys", headers=ADMIN_HEADERS)).json()[0]["revoked_at"] is None
+
+
+async def test_revoking_deletes_from_redis_again_after_the_commit(api, redis, monkeypatch):
+    """A reconciler pass can re-add a stale copy between the first delete and the commit; the second delete removes it."""
+    import app.keys.api as keys_api
+
+    key_id = (await create(api)).json()["id"]
+    original = keys_api.unpublish_key
+    calls = {"n": 0}
+
+    async def racing(r, kid):
+        calls["n"] += 1
+        await original(r, kid)
+        if calls["n"] == 1:                       # right after the first delete, a stale copy is written back
+            await r.set(f"key:{kid}", json.dumps({"hash": "x", "allowed_models": ["m1"], "allow_all": False, "expires_at": None, "name": "stale"}))
+
+    monkeypatch.setattr(keys_api, "unpublish_key", racing)
+    assert (await api.delete(f"/v1/keys/{key_id}", headers=ADMIN_HEADERS)).status_code == 204
+    assert calls["n"] == 2
+    assert await redis.exists(f"key:{key_id}") == 0

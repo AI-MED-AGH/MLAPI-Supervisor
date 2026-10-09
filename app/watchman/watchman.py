@@ -38,7 +38,7 @@ async def subscribe(subscription: SubscriptionRequest, session: Annotated[AsyncS
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error occurred while subscribing")
     else:
         await session.commit()
-        logger.info(f"Added subscription: {subscription}\n")
+        logger.info("Added a webhook subscription for %d event type(s)", len(subscription.event_types))
 
 
 @watchmanRouter.get("/")

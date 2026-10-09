@@ -24,4 +24,4 @@ class SubscriptionRequest(SubscriptionSchema):
     def _events(cls, value: list[str]) -> list[str]:
         if not value or any(not e.strip() for e in value):
             raise ValueError("event_types must be a non-empty list of non-empty strings")
-        return value
+        return list(dict.fromkeys(value))  # drop duplicates, keep order

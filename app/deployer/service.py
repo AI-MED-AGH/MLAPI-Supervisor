@@ -19,7 +19,9 @@ logger = logging.getLogger(__name__)
 BUSY_STATES = (states.DEPLOYING, states.STARTING, states.WAITING_FOR_GPU)
 _ENV_KEY_RE = re.compile(r"[A-Z_][A-Z0-9_]{0,63}")
 _NAME_RE = re.compile(r"[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
-_RESERVED_ENV_PREFIXES = ("FASTMLAPI_", "MLAPI_")
+_RESERVED_ENV_PREFIXES = ("FASTMLAPI_", "MLAPI_", "NVIDIA_", "CUDA_")
+# secrets a model must never be able to mount: the platform's own (image pull, Redis, environment) and cluster internals
+_RESERVED_SECRET_PREFIXES = ("ghcr-", "mlapi-", "kube", "default-token")
 CONFIG_FIELDS = ("env", "secret_refs", "idle_timeout_s", "max_job_seconds")
 
 
@@ -47,6 +49,8 @@ def validate_config(patch: dict) -> dict:
                 isinstance(v, str) and _NAME_RE.fullmatch(v) for v in value
             ):
                 raise Invalid("secret_refs must be a list of DNS-style names")
+            if any(v.startswith(_RESERVED_SECRET_PREFIXES) for v in value):
+                raise Invalid("secret_refs must not name platform secrets (ghcr-*, mlapi-*, kube*)")
             clean[field] = list(value)
         elif field == "idle_timeout_s":
             if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 604800:
@@ -100,6 +104,13 @@ class Deployer:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
+
+    async def shutdown(self) -> None:
+        """Stops running deploys. A model left mid-deploy is repaired by recover_interrupted at the next start."""
+        for task in list(self._tasks):
+            task.cancel()
+        await asyncio.gather(*list(self._tasks), return_exceptions=True)
+        self._tasks.clear()
 
     async def drain(self) -> None:
         while self._tasks:
@@ -393,12 +404,13 @@ class Deployer:
             self.spawn(model_id, digest)
 
     # ───────────── admin operations ─────────────
-    async def redeploy(self, session, model: Model) -> str:
+    async def redeploy(self, session, model: Model, *, clear_failed: bool = True) -> str:
         digest = model.current_digest or model.failed_digest
         if digest is None:
             raise Conflict(f"model {model.name!r} has nothing to redeploy")
         await self.begin(session, model, digest)
-        model.failed_digest = None
+        if clear_failed:  # an explicit "try again" forgets a known-bad digest; a config change must not
+            model.failed_digest = None
         return digest
 
     async def rollback(self, session, model: Model) -> str:
@@ -497,7 +509,7 @@ class Deployer:
             await session.flush()
             return False
         if model.state == states.READY:
-            await self.redeploy(session, model)
+            await self.redeploy(session, model, clear_failed=False)
             return True
         model.state_detail = "config changes apply on the next deploy"
         await session.flush()

@@ -53,4 +53,4 @@ class NotificationService:
             logger.exception("Error occured while deleting observers")
             await session.rollback()
         else:
-            logger.info(f"deleted observers: {observers_to_delete}")
+            logger.info("deleted %d observer(s) that stopped responding", len(observers_to_delete))

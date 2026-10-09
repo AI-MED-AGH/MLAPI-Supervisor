@@ -50,3 +50,16 @@ async def rebuild_keys(redis, session: AsyncSession, now: float | None = None) -
     async for redis_key in redis.scan_iter(match="key:*"):
         if redis_key.removeprefix("key:") not in valid_ids:
             await redis.delete(redis_key)
+
+
+async def drop_revoked(redis, sessionmaker, key_ids, now: float | None = None) -> None:
+    """Deletes from Redis any of `key_ids` that a FRESH read says is revoked or expired.
+
+    Closes a race: a snapshot taken before an admin revoked a key can be written back after the revocation."""
+    now = time.time() if now is None else now
+    async with sessionmaker() as session:
+        for key_id in key_ids:
+            key = await session.get(ApiKey, key_id)
+            await session.refresh(key) if key is not None else None
+            if key is None or not _is_valid(key, now):
+                await redis.delete(f"key:{key_id}")

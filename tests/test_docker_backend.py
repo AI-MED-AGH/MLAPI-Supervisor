@@ -215,3 +215,32 @@ async def test_queue_publishes_only_the_api_port(docker_client):
     await backend.apply_model(spec(mode="queue"))
     assert "ports" in docker_client.container_map["mlapi-m-ecg-api"].kwargs
     assert "ports" not in docker_client.container_map["mlapi-m-ecg-worker"].kwargs
+
+
+# ───────────── review findings ─────────────
+async def test_workloads_without_a_gpu_cannot_see_the_hosts_gpus(backend, docker_client):
+    """CUDA base images set NVIDIA_VISIBLE_DEVICES=all, which would hand every GPU to a container that was never approved one."""
+    await backend.apply_model(spec(mode="queue"))
+    for name in ("mlapi-m-ecg-api", "mlapi-m-ecg-worker"):
+        assert docker_client.container_map[name].kwargs["environment"]["NVIDIA_VISIBLE_DEVICES"] == "void"
+    await backend.apply_model(spec(name="plain"))
+    assert docker_client.container_map["mlapi-m-plain"].kwargs["environment"]["NVIDIA_VISIBLE_DEVICES"] == "void"
+
+
+async def test_an_approved_gpu_workload_is_not_blinded(backend, docker_client):
+    await backend.apply_model(spec(resources=GPU, env={"NVIDIA_VISIBLE_DEVICES": "all"}))
+    env = docker_client.container_map["mlapi-m-ecg"].kwargs["environment"]
+    assert "NVIDIA_VISIBLE_DEVICES" not in env          # the GPU comes from the device request, not from an env override
+
+
+async def test_a_running_worker_is_stopped_gracefully_before_it_is_replaced(backend, docker_client):
+    await backend.apply_model(spec(mode="queue", max_job_seconds=900))
+    await backend.scale("ecg", 1, role="worker")
+    await backend.apply_model(spec(mode="queue", max_job_seconds=900, image="ghcr.io/org/ecg@sha256:" + "b" * 64))
+    assert ("mlapi-m-ecg-worker", 900) in docker_client.stop_calls      # it gets time to finish its current job
+
+
+async def test_the_unenforceable_disk_limit_is_logged(backend, caplog):
+    with caplog.at_level("WARNING"):
+        await backend.apply_model(spec())
+    assert "disk" in caplog.text.lower() and "not enforced" in caplog.text.lower()

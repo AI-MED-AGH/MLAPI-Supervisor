@@ -21,8 +21,14 @@ class Services:
     _owned: tuple = ()
 
     async def aclose(self) -> None:
-        for resource in self._owned:
-            await resource.aclose()
+        await self.deployer.shutdown()
+        for resource in (*self._owned, self.backend, self.inspector):
+            closer = getattr(resource, "aclose", None)
+            if closer is not None:
+                try:
+                    await closer()
+                except Exception:
+                    pass
 
 
 def build_inspector(state, backend):

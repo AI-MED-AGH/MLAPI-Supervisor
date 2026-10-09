@@ -30,6 +30,7 @@ class FakeContainer:
 
     def stop(self, timeout=10):
         self.status = "exited"
+        self._client.stop_calls.append((self.name, timeout))
 
     def remove(self, force=False):
         self._client.container_map.pop(self.name, None)
@@ -136,6 +137,7 @@ class FakeDockerClient:
         self.network_map: dict[str, dict] = {}
         self.local_images: dict[str, FakeImage] = {}
         self.pulled: list[str] = []
+        self.stop_calls: list[tuple] = []
         self.unpullable: set[str] = set()
         self.containers = _Containers(self)
         self.images = _Images(self)

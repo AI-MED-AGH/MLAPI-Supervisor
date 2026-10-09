@@ -1,6 +1,6 @@
 import time
 
-from sqlalchemy import JSON, ForeignKey, String
+from sqlalchemy import JSON, BigInteger, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -28,9 +28,9 @@ class Model(Base):
     approved_resources: Mapped[dict | None] = mapped_column(JSON, default=None)
     requested_resources: Mapped[dict | None] = mapped_column(JSON, default=None)
     config: Mapped[dict] = mapped_column(JSON, default=dict)  # env, secret_refs, idle_timeout_s, max_job_seconds
-    created_at: Mapped[int] = mapped_column(default=_now)
-    updated_at: Mapped[int] = mapped_column(default=_now, onupdate=_now)
-    last_checked_at: Mapped[int | None] = mapped_column(default=None)
+    created_at: Mapped[int] = mapped_column(BigInteger, default=_now)
+    updated_at: Mapped[int] = mapped_column(BigInteger, default=_now, onupdate=_now)
+    last_checked_at: Mapped[int | None] = mapped_column(BigInteger, default=None)
 
     def __repr__(self) -> str:
         return f"Model(name={self.name!r}, state={self.state!r})"
@@ -45,9 +45,9 @@ class ResourceRequest(Base):
     requested: Mapped[dict] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(default=states.REQ_PENDING)
     decided_by: Mapped[str | None] = mapped_column(default=None)
-    decided_at: Mapped[int | None] = mapped_column(default=None)
+    decided_at: Mapped[int | None] = mapped_column(BigInteger, default=None)
     note: Mapped[str | None] = mapped_column(default=None)
-    created_at: Mapped[int] = mapped_column(default=_now)
+    created_at: Mapped[int] = mapped_column(BigInteger, default=_now)
 
 
 class Deployment(Base):
@@ -58,5 +58,5 @@ class Deployment(Base):
     digest: Mapped[str]
     status: Mapped[str]
     reason: Mapped[str | None] = mapped_column(default=None)
-    started_at: Mapped[int] = mapped_column(default=_now)
-    finished_at: Mapped[int | None] = mapped_column(default=None)
+    started_at: Mapped[int] = mapped_column(BigInteger, default=_now)
+    finished_at: Mapped[int | None] = mapped_column(BigInteger, default=None)

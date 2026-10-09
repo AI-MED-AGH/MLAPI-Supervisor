@@ -86,3 +86,9 @@ def test_queue_redis_is_separate_from_the_control_redis():
     secrets = {e["valueFrom"]["secretKeyRef"]["name"] for c in (control, queue)
                for e in c["spec"]["template"]["spec"]["containers"][0]["env"]}
     assert secrets == {"mlapi-redis", "mlapi-queue-redis"}            # different passwords
+
+
+def test_models_namespace_limits_ephemeral_storage():
+    assert "requests.ephemeral-storage" in by_kind("ResourceQuota")[0]["spec"]["hard"]
+    limit = by_kind("LimitRange")[0]["spec"]["limits"][0]
+    assert limit["default"]["ephemeral-storage"] and limit["max"]["ephemeral-storage"]

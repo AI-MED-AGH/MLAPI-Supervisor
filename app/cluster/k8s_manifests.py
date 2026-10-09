@@ -29,17 +29,22 @@ def labels(model: str, role: str) -> dict[str, str]:
     return {**MANAGED_BY, "mlapi/model": model, "mlapi/role": role}
 
 
-def resource_block(res: Resources, *, gpu: bool) -> dict:
-    values = {"cpu": f"{res.cpu_m}m", "memory": str(res.memory_bytes)}
+def resource_block(res: Resources, *, gpu: bool, ephemeral: str = "2Gi") -> dict:
+    values = {"cpu": f"{res.cpu_m}m", "memory": str(res.memory_bytes), "ephemeral-storage": ephemeral}
     limits = dict(values)
     if gpu:
         limits["nvidia.com/gpu"] = "1"
     return {"requests": values, "limits": limits}  # requests == limits: predictable QoS
 
 
-def _env(spec: ModelSpec, fastmlapi_role: str, cache: bool) -> list[dict]:
-    env = {k: v for k, v in spec.env.items() if k not in ("FASTMLAPI_ROLE", "FASTMLAPI_CACHE_DIR", "HF_HOME", "FASTMLAPI_QUEUE_URL")}
+def _env(spec: ModelSpec, fastmlapi_role: str, cache: bool, gpu: bool) -> list[dict]:
+    reserved = ("FASTMLAPI_ROLE", "FASTMLAPI_CACHE_DIR", "HF_HOME", "FASTMLAPI_QUEUE_URL")
+    env = {k: v for k, v in spec.env.items() if k not in reserved and not k.startswith(("NVIDIA_", "CUDA_"))}
     env["FASTMLAPI_ROLE"] = fastmlapi_role  # platform variables always win
+    if not gpu:
+        # CUDA base images set NVIDIA_VISIBLE_DEVICES=all; where nvidia is the default runtime that would hand every GPU
+        # to a workload that was never approved one
+        env["NVIDIA_VISIBLE_DEVICES"] = "void"
     if cache:
         env["FASTMLAPI_CACHE_DIR"] = "/cache"
         env["HF_HOME"] = "/cache/hf"
@@ -62,8 +67,8 @@ def deployment(spec: ModelSpec, role: str, settings: Settings, replicas: int) ->
     container: dict = {
         "name": "model",
         "image": spec.image,
-        "env": _env(spec, fastmlapi_role, cache),
-        "resources": resource_block(resources, gpu=gpu),
+        "env": _env(spec, fastmlapi_role, cache, gpu),
+        "resources": resource_block(resources, gpu=gpu, ephemeral=settings.k8s_ephemeral_storage),
         "securityContext": {
             "allowPrivilegeEscalation": False,
             "capabilities": {"drop": ["ALL"]},
@@ -87,6 +92,8 @@ def deployment(spec: ModelSpec, role: str, settings: Settings, replicas: int) ->
 
     pod_spec: dict = {
         "automountServiceAccountToken": False,
+        # a fresh PVC is root-owned: the group makes it writable for whatever non-root user the image runs as
+        "securityContext": {"runAsNonRoot": True, "fsGroup": 10001, "seccompProfile": {"type": "RuntimeDefault"}},
         "enableServiceLinks": False,
         "terminationGracePeriodSeconds": spec.max_job_seconds if is_worker else 30,
         "containers": [container],

@@ -1,3 +1,4 @@
+import logging
 import re
 import time
 
@@ -13,6 +14,7 @@ from app.keys import queries
 from app.keys.tables import ApiKey
 from app.redis_sync.keys import publish_key, unpublish_key
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/keys", tags=["keys"], dependencies=[Depends(require_admin)])
 
 _PATTERN_RE = re.compile(r"[a-z0-9][-a-z0-9]{0,38}\*?")
@@ -149,6 +151,10 @@ async def revoke_key(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Key not found")
     if key.revoked_at is None:
         await queries.revoke_key(session, key)
-    await _redis_or_503(session, unpublish_key(redis, key.id))
+    await _redis_or_503(session, unpublish_key(redis, key.id))  # first: a Redis outage must fail the request, not the key
     await session.commit()
+    try:  # again after the commit: a reconciler pass may have re-added a stale copy in between
+        await unpublish_key(redis, key.id)
+    except RedisError:
+        logger.warning("Second Redis delete of a revoked key failed; the reconciler will remove it")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

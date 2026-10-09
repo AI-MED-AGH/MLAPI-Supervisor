@@ -51,3 +51,17 @@ async def test_subscribe_list_and_delete(api):
 
 async def test_delete_unknown_observer_is_404(api):
     assert (await api.delete(OBS + "/999", headers=ADMIN_HEADERS)).status_code == 404
+
+
+async def test_duplicate_event_types_are_stored_once(api):
+    await api.post(OBS + "/", headers=ADMIN_HEADERS, json={"webhook_url": "http://h/x", "event_types": ["a", "a", "b", "a"]})
+    listing = (await api.get(OBS + "/", headers=ADMIN_HEADERS)).json()
+    assert listing[0]["event_types"] == ["a", "b"]
+
+
+async def test_webhook_urls_never_reach_the_logs(api, caplog):
+    secret_url = "https://hooks.example/services/T000/B000/SECRETTOKEN"
+    with caplog.at_level("DEBUG"):
+        await api.post(OBS + "/", headers=ADMIN_HEADERS, json={"webhook_url": secret_url, "event_types": ["a"]})
+    ours = [r.getMessage() for r in caplog.records if r.name.startswith("app")]   # third-party DEBUG logs are off in production
+    assert ours and not any("SECRETTOKEN" in m for m in ours)

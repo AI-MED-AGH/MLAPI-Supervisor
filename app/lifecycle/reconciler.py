@@ -1,6 +1,7 @@
 import logging
 
-from app.redis_sync.keys import rebuild_keys
+from app.keys.queries import list_keys
+from app.redis_sync.keys import drop_revoked, rebuild_keys
 from app.redis_sync.routes import delete_route, delete_schema, publish_route, publish_schema
 from app.registry import states
 from app.registry.errors import Conflict
@@ -39,6 +40,9 @@ class Reconciler:
         try:  # Redis may have restarted since the last pass, taking every API key with it
             async with self._sm() as session:
                 await rebuild_keys(self._redis, session)
+                published = [k.id for k in await list_keys(session)]
+            # a revoke that committed after the snapshot above must not be undone by the writes it just made
+            await drop_revoked(self._redis, self._sm, published)
         except Exception:
             logger.exception("Could not republish API keys")
 

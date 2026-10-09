@@ -21,9 +21,9 @@ def upgrade() -> None:
     sa.Column('secret_hash', sa.String(), nullable=False),
     sa.Column('allowed_models', sa.JSON(), nullable=False),
     sa.Column('allow_all', sa.Boolean(), nullable=False),
-    sa.Column('expires_at', sa.Integer(), nullable=True),
-    sa.Column('revoked_at', sa.Integer(), nullable=True),
-    sa.Column('created_at', sa.Integer(), nullable=False),
+    sa.Column('expires_at', sa.BigInteger(), nullable=True),
+    sa.Column('revoked_at', sa.BigInteger(), nullable=True),
+    sa.Column('created_at', sa.BigInteger(), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('observers',

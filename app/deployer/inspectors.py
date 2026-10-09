@@ -16,6 +16,9 @@ class GhcrInspector:
         self._client = client
         self._org = org
 
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
     async def inspect(self, image: str, source: str) -> ImageInfo:
         if source != "ghcr":
             raise LookupError(image)
@@ -36,6 +39,12 @@ class GhcrInspector:
 class CompositeInspector:
     def __init__(self, *, local, ghcr):
         self._by_source = {"local": local, "ghcr": ghcr}
+
+    async def aclose(self) -> None:
+        for inspector in self._by_source.values():
+            closer = getattr(inspector, "aclose", None)
+            if closer is not None:
+                await closer()
 
     async def inspect(self, image: str, source: str) -> ImageInfo:
         inspector = self._by_source.get(source)

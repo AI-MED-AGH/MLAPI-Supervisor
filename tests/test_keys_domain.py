@@ -53,3 +53,19 @@ async def test_list_update_revoke(session):
 
 async def test_get_unknown_key_is_none(session):
     assert await get_key(session, "doesnotexist") is None
+
+
+def test_timestamps_are_64_bit_so_postgres_does_not_overflow_in_2038():
+    import sqlalchemy as sa
+
+    from app.keys.tables import ApiKey
+    from app.registry.tables import Deployment, Model, ResourceRequest
+
+    for table, columns in (
+        (ApiKey, ("expires_at", "revoked_at", "created_at")),
+        (Model, ("created_at", "updated_at", "last_checked_at")),
+        (ResourceRequest, ("decided_at", "created_at")),
+        (Deployment, ("started_at", "finished_at")),
+    ):
+        for column in columns:
+            assert isinstance(table.__table__.c[column].type, sa.BigInteger), f"{table.__name__}.{column}"

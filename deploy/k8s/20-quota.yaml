@@ -12,6 +12,8 @@ spec:
     limits.cpu: "16"
     limits.memory: 64Gi
     requests.storage: 500Gi
+    requests.ephemeral-storage: 100Gi
+    limits.ephemeral-storage: 100Gi
     persistentvolumeclaims: "40"
     requests.nvidia.com/gpu: "4"
 ---
@@ -26,9 +28,12 @@ spec:
       max:
         cpu: "8"
         memory: 32Gi
+        ephemeral-storage: 20Gi
       default:
         cpu: "1"
         memory: 2Gi
+        ephemeral-storage: 2Gi
       defaultRequest:
         cpu: "1"
         memory: 2Gi
+        ephemeral-storage: 2Gi

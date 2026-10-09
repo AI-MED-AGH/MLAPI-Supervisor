@@ -32,7 +32,7 @@ def test_sync_deployment_limits_probes_and_hardening():
     c, pod_spec = container(dep), dep["spec"]["template"]["spec"]
     assert dep["metadata"]["name"] == "m-ecg" and dep["spec"]["replicas"] == 1
     assert c["image"] == IMAGE
-    assert c["resources"]["requests"] == c["resources"]["limits"] == {"cpu": "1500m", "memory": str(4 * GI)}
+    assert c["resources"]["requests"] == c["resources"]["limits"] == {"cpu": "1500m", "memory": str(4 * GI), "ephemeral-storage": "2Gi"}
     assert "startupProbe" in c and c["startupProbe"]["failureThreshold"] * c["startupProbe"]["periodSeconds"] >= 1800
     assert c["readinessProbe"]["httpGet"]["path"] == "/health"
     assert c["securityContext"]["runAsNonRoot"] is True and c["securityContext"]["allowPrivilegeEscalation"] is False
@@ -67,7 +67,7 @@ def test_queue_api_and_worker_deployments():
     q = spec(mode="queue", resources=GPU, queue_url="redis://m_ecg:pw@redis:6379/0", max_job_seconds=900)
     api, worker = m.deployment(q, "api", S, 1), m.deployment(q, "worker", S, 0)
     assert api["metadata"]["name"] == "m-ecg-api" and worker["metadata"]["name"] == "m-ecg-worker"
-    assert container(api)["resources"]["limits"] == {"cpu": "100m", "memory": str(256 * 1024 * 1024)}
+    assert container(api)["resources"]["limits"] == {"cpu": "100m", "memory": str(256 * 1024 * 1024), "ephemeral-storage": "2Gi"}
     assert "volumeMounts" not in container(api)
     assert container(worker)["resources"]["limits"]["nvidia.com/gpu"] == "1"
     assert "ports" not in container(worker) and "readinessProbe" not in container(worker)
@@ -207,3 +207,23 @@ async def test_cluster_errors_become_backend_errors(api):
     api.apps.create_namespaced_deployment = boom
     with pytest.raises(BackendError):
         await KubernetesBackend(S, api=api).apply_model(spec())
+
+
+# ───────────── review findings ─────────────
+def test_non_gpu_pods_cannot_see_the_nodes_gpus():
+    for role, sp in (("main", spec()), ("api", spec(mode="queue")), ("worker", spec(mode="queue"))):
+        env = {e["name"]: e["value"] for e in container(m.deployment(sp, role, S, 1))["env"]}
+        assert env["NVIDIA_VISIBLE_DEVICES"] == "void", role
+    gpu_env = {e["name"]: e["value"] for e in container(m.deployment(spec(resources=GPU), "main", S, 1))["env"]}
+    assert "NVIDIA_VISIBLE_DEVICES" not in gpu_env
+
+
+def test_pods_have_an_ephemeral_storage_limit():
+    c = container(m.deployment(spec(), "main", S, 1))
+    assert c["resources"]["limits"]["ephemeral-storage"] == S.k8s_ephemeral_storage == c["resources"]["requests"]["ephemeral-storage"]
+
+
+def test_the_cache_volume_is_writable_for_any_non_root_user():
+    pod_spec = m.deployment(spec(), "main", S, 1)["spec"]["template"]["spec"]
+    assert pod_spec["securityContext"]["fsGroup"] == 10001           # a fresh PVC is root-owned: the group makes it writable
+    assert pod_spec["securityContext"]["runAsNonRoot"] is True
