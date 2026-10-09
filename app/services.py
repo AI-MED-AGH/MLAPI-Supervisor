@@ -18,6 +18,28 @@ class Services:
     deployer: Deployer
 
 
+def build_inspector(state, backend):
+    """Local images are read from the Docker engine; GHCR images need GHCR_ORG and GHCR_TOKEN."""
+    import httpx
+
+    from app.deployer.inspectors import CompositeInspector, GhcrInspector
+    from app.poller.ghcr import GhcrClient
+
+    settings = state.settings
+    local = None
+    if hasattr(backend, "client"):  # the Docker backend
+        from app.cluster.docker import DockerInspector
+
+        local = DockerInspector(backend.client)
+    ghcr = None
+    if settings.ghcr_org and settings.ghcr_token:
+        http = httpx.AsyncClient(timeout=20, follow_redirects=True)
+        ghcr = GhcrInspector(GhcrClient(token=settings.ghcr_token, org=settings.ghcr_org, http=http), settings.ghcr_org)
+    if local is None and ghcr is None:
+        return None
+    return CompositeInspector(local=local, ghcr=ghcr)
+
+
 def build_services(app: FastAPI) -> Services:
     from app.cluster.factory import make_backend
 
@@ -38,7 +60,7 @@ def build_services(app: FastAPI) -> Services:
     return Services(
         backend=backend,
         probe=probe,
-        inspector=state.inspector,
+        inspector=state.inspector or build_inspector(state, backend),
         events=events,
         registry=RegistryService(events),
         deployer=deployer,

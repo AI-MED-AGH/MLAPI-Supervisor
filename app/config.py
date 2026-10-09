@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     k8s_namespace: str = "mlapi-models"
     storage_class: str | None = None
     docker_network: str = "mlapi-models"
+    docker_publish_ports: bool = False  # dev: publish model ports on 127.0.0.1 (Supervisor/Router run on the host)
     router_selector: str = "app=mlapi-router"
 
     ghcr_org: str | None = None
