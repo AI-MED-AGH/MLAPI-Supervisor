@@ -24,6 +24,7 @@ def settings():
         admin_api_keys=hashlib.sha256(ADMIN_KEY.encode()).hexdigest(),
         cluster_backend="fake",
         auto_migrate=False,
+        run_background=False,
         deploy_timeout=0.5,
         deploy_poll_interval=0.01,
     )
@@ -90,3 +91,10 @@ async def api(settings, redis, sessionmaker):
         c.app, c.backend, c.probe, c.inspector = app, backend, probe, inspector
         yield c
     await app.state.services.deployer.drain() if app.state.services else None
+
+
+@pytest.fixture
+def env(sessionmaker, redis):
+    from tests.support import build_env
+
+    return build_env(sessionmaker, redis)

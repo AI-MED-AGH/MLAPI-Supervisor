@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -24,7 +26,7 @@ async def test_startup_migrates_and_rebuilds_keys(file_db, redis):
     await redis.flushall()  # simulate a Redis restart that lost everything
     await redis.set("key:stale0000000", "{}")
 
-    settings = Settings(_env_file=None, database_url=url, auto_migrate=True)
+    settings = Settings(_env_file=None, database_url=url, auto_migrate=True, run_background=False)
     app = create_app(settings, redis=redis, sessionmaker=sessionmaker)
     async with app.router.lifespan_context(app):
         assert await redis.exists(f"key:{key.id}") == 1
@@ -33,7 +35,7 @@ async def test_startup_migrates_and_rebuilds_keys(file_db, redis):
 
 async def test_startup_migrates_an_empty_database(file_db, redis):
     url, sessionmaker = file_db
-    settings = Settings(_env_file=None, database_url=url, auto_migrate=True)
+    settings = Settings(_env_file=None, database_url=url, auto_migrate=True, run_background=False)
     app = create_app(settings, redis=redis, sessionmaker=sessionmaker)
     async with app.router.lifespan_context(app):
         pass
@@ -45,8 +47,19 @@ async def test_startup_migrates_an_empty_database(file_db, redis):
 
 async def test_auto_migrate_off_does_not_touch_schema(file_db, redis):
     url, sessionmaker = file_db
-    settings = Settings(_env_file=None, database_url=url, auto_migrate=False)
+    settings = Settings(_env_file=None, database_url=url, auto_migrate=False, run_background=False)
     app = create_app(settings, redis=redis, sessionmaker=sessionmaker)
     with pytest.raises(Exception):  # no tables: rebuild_keys fails loudly instead of silently continuing
         async with app.router.lifespan_context(app):
             pass
+
+
+async def test_lifespan_starts_and_stops_background_services(file_db, redis):
+    url, sessionmaker = file_db
+    settings = Settings(_env_file=None, database_url=url, auto_migrate=True, cluster_backend="fake",
+                        run_background=True, reaper_interval=0.01, reconcile_interval=0.01, queue_poll_interval=0.01)
+    app = create_app(settings, redis=redis, sessionmaker=sessionmaker)
+    async with app.router.lifespan_context(app):
+        assert app.state.services is not None
+        await asyncio.sleep(0.05)
+    await asyncio.sleep(0.02)   # no exception from cancelled loops after shutdown

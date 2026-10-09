@@ -177,6 +177,9 @@ class Deployer:
 
             url = await self._backend.endpoint(name)
             schema = await self._probe.schema(url)
+            new_state = states.READY
+            if mode == "queue" and (await self._backend.status(name)).worker_replicas == 0:
+                new_state = states.SLEEPING  # the API is up; the worker starts when jobs arrive
             async with self._sm() as session:
                 model = await get_model(session, model_id)
                 if old_current and old_current != digest:
@@ -184,14 +187,14 @@ class Deployer:
                 model.current_digest = digest
                 if model.pending_digest == digest:
                     model.pending_digest = None
-                model.state, model.state_detail = states.READY, None
+                model.state, model.state_detail = new_state, None
                 dep = await session.get(Deployment, deployment_id)
                 dep.status, dep.finished_at = states.DEP_SUCCEEDED, int(time.time())
                 await session.commit()
             await self._set_route(name, states.READY, mode)
             if schema:
                 await publish_schema(self._redis, name, schema)
-            self._emit("deploy.succeeded", name, digest, states.READY)
+            self._emit("deploy.succeeded", name, digest, new_state)
 
     async def _deploy_version(self, model_id: int, name: str, mode: str, digest: str, *, first: bool) -> None:
         async with self._sm() as session:
@@ -239,6 +242,25 @@ class Deployer:
                 raise DeployFailed("timed out waiting for the model to become ready")
             await asyncio.sleep(self._settings.deploy_poll_interval)
 
+    async def _worker_loaded(self, name: str) -> bool:
+        """True when a live worker reports that its model is loaded (fastmlapi heartbeat keys)."""
+        async for key in self._redis.scan_iter(match=f"fastmlapi:{name}:workers:*"):
+            loaded = await self._redis.hget(key, "model_loaded")
+            if loaded is not None and str(loaded).lower() in ("true", "1"):
+                return True
+        return False
+
+    async def _wait_worker_ready(self, name: str) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._settings.deploy_timeout
+        while not await self._worker_loaded(name):
+            status = await self._backend.status(name)
+            if status.pending_reason and "gpu" in status.pending_reason.lower():
+                deadline = loop.time() + self._settings.deploy_timeout  # waiting for a GPU is not a failure
+            if loop.time() > deadline:
+                raise DeployFailed("worker did not report a loaded model in time")
+            await asyncio.sleep(self._settings.deploy_poll_interval)
+
     async def _handle_failure(
         self, model_id: int, name: str, mode: str, digest: str, old_current: str | None, deployment_id: int, reason: str
     ) -> None:
@@ -273,6 +295,27 @@ class Deployer:
             except Exception:
                 logger.exception("Could not clean up failed deployment of %s", name)
         self._emit("deploy.failed", name, digest, final_state, reason=reason, rolled_back=rolled_back)
+
+    async def recover_interrupted(self) -> None:
+        """After a restart, no deploy task is running: repair models stuck in a busy state."""
+        from sqlalchemy import select
+
+        async with self._sm() as session:
+            busy = (await session.scalars(select(Model).where(Model.state.in_(BUSY_STATES)))).all()
+            for model in busy:
+                logger.warning("Model %s was %s when the supervisor stopped", model.name, model.state)
+                if model.current_digest:
+                    model.state, model.state_detail = states.READY, "a deploy was interrupted by a restart"
+                else:
+                    model.state, model.state_detail = states.FAILED, "deploy interrupted by a supervisor restart"
+                running = (
+                    await session.scalars(
+                        select(Deployment).where(Deployment.model_id == model.id, Deployment.status == "started")
+                    )
+                ).all()
+                for dep in running:
+                    dep.status, dep.reason, dep.finished_at = states.DEP_FAILED, "interrupted by restart", int(time.time())
+            await session.commit()
 
     # ───────────── admin operations ─────────────
     async def redeploy(self, session, model: Model) -> str:
@@ -321,9 +364,10 @@ class Deployer:
                 if mode == "sync":
                     await self._set_route(name, states.STARTING, mode)
                     await self._backend.scale(name, 1, role="main")
+                    await self._wait_ready(model_id, name, mode)
                 else:
                     await self._backend.scale(name, 1, role="worker")
-                await self._wait_ready(model_id, name, mode)
+                    await self._wait_worker_ready(name)
             except (DeployFailed, BackendError) as exc:
                 await self._update(model_id, state=states.FAILED, state_detail=f"wake failed: {exc}")
                 await self._set_route(name, "unavailable", mode)

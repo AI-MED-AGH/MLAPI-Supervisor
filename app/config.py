@@ -21,13 +21,15 @@ class Settings(BaseSettings):
 
     ghcr_org: str | None = None
     ghcr_token: str | None = None
-    poll_interval: int = 300
+    poll_interval: float = 300
     deploy_timeout: float = 1800
     deploy_poll_interval: float = 2.0
     gpu_wait_max: float = 86400
     max_restarts: int = 3
-    reconcile_interval: int = 60
-    queue_poll_interval: int = 5
+    reconcile_interval: float = 60
+    queue_poll_interval: float = 5
+    reaper_interval: float = 30
+    run_background: bool = True
     default_idle_timeout: int = 900
     api_cpu_m: int = 100
     api_memory_bytes: int = 256 * 1024 * 1024

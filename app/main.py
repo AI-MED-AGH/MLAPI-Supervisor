@@ -8,6 +8,8 @@ from app.auth import require_admin
 from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.keys.api import router as keys_router
+from app.lifecycle.runner import build_background
+from app.services import build_services
 from app.migrate import upgrade_to_head
 from app.registry.api import approvals_router, models_router
 from app.registry.errors import Conflict, Invalid, NotFound
@@ -30,6 +32,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         owned = []
+        background = None
         if app.state.redis is None:
             app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True)
             owned.append(app.state.redis.aclose)
@@ -38,8 +41,16 @@ def create_app(
                 await upgrade_to_head(settings.db_url)
             async with app.state.sessionmaker() as session:
                 await rebuild_keys(app.state.redis, session)
+            if settings.run_background:
+                app.state.services = build_services(app)
+                await app.state.services.deployer.recover_interrupted()
+                background = build_background(app.state.services, app.state)
+                background.start()
             yield
         finally:
+            if background is not None:
+                await background.stop()
+                await app.state.services.events.drain()
             for close in owned:
                 await close()
 

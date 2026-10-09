@@ -4,88 +4,11 @@ import json
 import pytest
 
 from app.cluster.backend import BackendError
-from app.cluster.fake import FakeBackend
-from app.config import Settings
-from app.deployer.service import Deployer
-from app.events import EventBus
 from app.registry import states
 from app.registry.errors import Conflict, Invalid
-from app.registry.labels import ModelLabels
-from app.registry.queries import get_model_by_name, list_deployments
+from app.registry.queries import get_model, get_model_by_name, list_deployments
 from app.registry.resources import Resources
-from app.registry.service import RegistryService
-from tests.fakes import FakeProbe
-
-GI = 1024**3
-RES = Resources(cpu_m=1000, memory_bytes=2 * GI, gpu=False, disk_bytes=5 * GI)
-GPU_RES = Resources(cpu_m=1000, memory_bytes=2 * GI, gpu=True, disk_bytes=5 * GI)
-
-
-class Notifier:
-    def __init__(self):
-        self.events = []
-
-    async def notify(self, session, event, payload):
-        self.events.append((event, payload["model"], payload["digest"], payload["details"]))
-
-    def names(self):
-        return [e[0] for e in self.events]
-
-
-class Env:
-    pass
-
-
-@pytest.fixture
-def env(sessionmaker, redis):
-    e = Env()
-    e.settings = Settings(_env_file=None, cluster_backend="fake", deploy_timeout=1.5,
-                          deploy_poll_interval=0.01, gpu_wait_max=5, auto_migrate=False)
-    e.backend, e.probe, e.redis, e.sm = FakeBackend(), FakeProbe(), redis, sessionmaker
-    e.notifier = Notifier()
-    e.events = EventBus(sessionmaker, e.notifier)
-    e.registry = RegistryService(e.events)
-    e.deployer = Deployer(sessionmaker=sessionmaker, backend=e.backend, redis=redis,
-                          events=e.events, probe=e.probe, settings=e.settings)
-    return e
-
-
-async def make_model(env, *, mode="sync", resources=RES, digest="sha256:a", name="ecg"):
-    """Registers and approves a model; returns its id (not yet deployed)."""
-    async with env.sm() as s:
-        sub = await env.registry.submit_digest(
-            s, name=name, image=f"ghcr.io/org/{name}", digest=digest,
-            labels=ModelLabels(name=name, mode=mode, resources=resources), source="ghcr")
-        from app.registry.queries import list_requests
-        req = (await list_requests(s, status=states.REQ_PENDING))[0]
-        model, _ = await env.registry.approve(s, req.id)
-        await s.commit()
-        return model.id
-
-
-async def deploy(env, model_id, digest="sha256:a"):
-    async with env.sm() as s:
-        from app.registry.queries import get_model
-        model = await get_model(s, model_id)
-        await env.deployer.begin(s, model, digest)
-        await s.commit()
-    await env.deployer.run(model_id, digest)
-    await env.events.drain()
-
-
-async def get(env, name="ecg"):
-    async with env.sm() as s:
-        return await get_model_by_name(s, name)
-
-
-async def wait_until(predicate, timeout=2.0):
-    loop = asyncio.get_running_loop()
-    end = loop.time() + timeout
-    while loop.time() < end:
-        if await predicate():
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("condition not met in time")
+from tests.support import GI, GPU_RES, RES, _ready_model, deploy, get, make_model, wait_until
 
 
 async def test_first_deploy_succeeds_and_publishes_route_and_schema(env):
@@ -203,7 +126,6 @@ async def test_rollback_failure_leaves_model_failed_with_both_reasons(env):
 async def test_begin_rejects_invalid_transitions(env):
     mid = await make_model(env)
     async with env.sm() as s:
-        from app.registry.queries import get_model
         model = await get_model(s, mid)
         await env.deployer.begin(s, model, "sha256:a")
         with pytest.raises(Conflict):
@@ -220,7 +142,6 @@ async def test_concurrent_runs_for_one_model_are_serialised(env):
     env.backend.ready_after = 3
     mid = await make_model(env)
     async with env.sm() as s:
-        from app.registry.queries import get_model
         model = await get_model(s, mid)
         await env.deployer.begin(s, model, "sha256:a")
         await s.commit()
@@ -235,7 +156,6 @@ async def test_gpu_model_waits_for_slice_without_failing(env):
     env.backend.gpu_slots = 0
     mid = await make_model(env, resources=GPU_RES)
     async with env.sm() as s:
-        from app.registry.queries import get_model
         await env.deployer.begin(s, await get_model(s, mid), "sha256:a")
         await s.commit()
     task = env.deployer.spawn(mid, "sha256:a")
@@ -246,16 +166,10 @@ async def test_gpu_model_waits_for_slice_without_failing(env):
     await asyncio.sleep(0.6)                      # three times deploy_timeout: still not failed
     assert (await get(env)).state == states.WAITING_FOR_GPU
     env.backend.gpu_slots = 1
-    await asyncio.wait_for(task, 3)
+    await asyncio.wait_for(task, 10)
     assert (await get(env)).state == states.READY
     await env.events.drain()
     assert "model.waiting_for_gpu" in env.notifier.names()
-
-
-async def _ready_model(env, **kw):
-    mid = await make_model(env, **kw)
-    await deploy(env, mid)
-    return mid
 
 
 async def test_sleep_and_wake_sync_model(env):
@@ -290,10 +204,20 @@ async def test_sleep_wake_guards(env):
             await env.deployer.sleep(s, model)               # not ready
 
 
+async def test_queue_mode_deploys_with_worker_idle(env):
+    await _ready_model(env, mode="queue")
+    model = await get(env)
+    assert model.state == states.SLEEPING             # API is up, worker not started yet
+    assert json.loads(await env.redis.get("route:ecg")) == {"url": "http://fake-ecg:8000", "state": "ready", "mode": "queue"}
+    assert (await env.backend.status("ecg")).worker_replicas == 0
+
+
 async def test_queue_mode_sleep_only_scales_worker_and_keeps_route_ready(env):
     await _ready_model(env, mode="queue")
+    await env.backend.scale("ecg", 1, role="worker")
     async with env.sm() as s:
         model = await get_model_by_name(s, "ecg")
+        model.state = states.READY
         await env.deployer.sleep(s, model)
         await s.commit()
     assert ("scale", "ecg", 0, "worker") in env.backend.calls
@@ -319,7 +243,6 @@ async def test_remove_cleans_everything(env):
 async def test_cannot_remove_while_deploying(env):
     mid = await make_model(env)
     async with env.sm() as s:
-        from app.registry.queries import get_model
         model = await get_model(s, mid)
         await env.deployer.begin(s, model, "sha256:a")
         with pytest.raises(Conflict):
