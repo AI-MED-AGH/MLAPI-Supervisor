@@ -18,6 +18,7 @@ class FakeBackend:
         self.ready_after = ready_after
         self.gpu_slots = gpu_slots  # None = unlimited
         self.fail_apply: Exception | None = None
+        self.never_ready: set[str] = set()  # image refs whose workloads never become ready
         self.models: dict[str, _Entry] = {}
         self.calls: list[tuple] = []
 
@@ -64,6 +65,8 @@ class FakeBackend:
                 worker_replicas=entry.worker_replicas,
                 pending_reason="unschedulable: no free GPU slice",
             )
+        if entry.spec.image in self.never_ready:
+            return RuntimeStatus(exists=True, replicas=entry.replicas, worker_replicas=entry.worker_replicas)
         if entry.replicas > 0 and entry.polls_left > 0:
             entry.polls_left -= 1
             return RuntimeStatus(exists=True, replicas=entry.replicas, worker_replicas=entry.worker_replicas)

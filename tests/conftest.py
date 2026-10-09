@@ -24,6 +24,8 @@ def settings():
         admin_api_keys=hashlib.sha256(ADMIN_KEY.encode()).hexdigest(),
         cluster_backend="fake",
         auto_migrate=False,
+        deploy_timeout=0.5,
+        deploy_poll_interval=0.01,
     )
 
 
@@ -69,7 +71,14 @@ async def api(settings, redis, sessionmaker):
     from app.db import get_session
     from app.main import create_app
 
-    app = create_app(settings, redis=redis)
+    from app.cluster.fake import FakeBackend
+    from tests.fakes import FakeInspector, FakeProbe
+
+    backend, probe, inspector = FakeBackend(), FakeProbe(), FakeInspector()
+    app = create_app(
+        settings, redis=redis, sessionmaker=sessionmaker,
+        backend=backend, probe=probe, inspector=inspector,
+    )
 
     async def override_session():
         async with sessionmaker() as s:
@@ -78,5 +87,6 @@ async def api(settings, redis, sessionmaker):
     app.dependency_overrides[get_session] = override_session
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://sup") as c:
-        c.app = app
+        c.app, c.backend, c.probe, c.inspector = app, backend, probe, inspector
         yield c
+    await app.state.services.deployer.drain() if app.state.services else None

@@ -22,7 +22,10 @@ class Settings(BaseSettings):
     ghcr_org: str | None = None
     ghcr_token: str | None = None
     poll_interval: int = 300
-    deploy_timeout: int = 1800
+    deploy_timeout: float = 1800
+    deploy_poll_interval: float = 2.0
+    gpu_wait_max: float = 86400
+    max_restarts: int = 3
     reconcile_interval: int = 60
     queue_poll_interval: int = 5
     default_idle_timeout: int = 900
