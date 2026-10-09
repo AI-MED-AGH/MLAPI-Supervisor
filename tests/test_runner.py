@@ -84,15 +84,19 @@ async def test_interrupted_first_deploy_is_marked_failed(env):
         assert (await list_deployments(s, mid))[0].status == "failed"
 
 
-async def test_interrupted_upgrade_returns_to_ready_on_the_running_version(env):
+async def test_interrupted_upgrade_re_verifies_the_running_version(env):
+    """The cluster may be running a half-applied new version; recovery must deploy the known-good one again."""
     mid = await _ready_model(env)
     async with env.sm() as s:
         model = await get_model_by_name(s, "ecg")
         model.state = states.DEPLOYING
         await s.commit()
+    applies_before = len([c for c in env.backend.calls if c[0] == "apply_model"])
     await env.deployer.recover_interrupted()
+    await env.deployer.drain()
     model = await get(env)
     assert model.state == states.READY and model.current_digest == "sha256:a"
+    assert len([c for c in env.backend.calls if c[0] == "apply_model"]) == applies_before + 1
 
 
 async def test_recovery_leaves_healthy_models_alone(env):

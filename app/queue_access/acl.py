@@ -41,19 +41,24 @@ class QueueAccess:
         self._secret = secret
         self._base = model_redis_url
         self._unsafe: str | None = None
+        self._verified = False
         self._dedicated = dedicated  # True only when the queue Redis holds nothing but queue data
 
     async def verify_server(self) -> None:
-        """Remembers whether the Redis server is new enough (>= 7). Never raises: provisioning will refuse instead."""
+        """Checks the Redis version (>= 7 enforces the ACL inside scripts). Never raises; provision() fails closed."""
         try:
             version = str((await self._redis.info("server")).get("redis_version", ""))
             major = int(version.split(".")[0])
         except Exception:
-            logger.warning("Could not read the queue Redis version")
+            logger.warning("Could not read the queue Redis version; queue-mode models stay disabled until it can be")
+            self._unsafe = "could not verify the queue Redis version (needs Redis 7 or newer)"
             return
         if major < 7:
             self._unsafe = f"queue-mode models need Redis 7 or newer (found {version})"
             logger.error(self._unsafe)
+        else:
+            self._unsafe = None
+            self._verified = True
 
     @staticmethod
     def _check(name: str) -> None:
@@ -75,8 +80,10 @@ class QueueAccess:
     async def provision(self, name: str) -> str:
         """Creates or refreshes the ACL user and returns the Redis URL the model should use."""
         self._check(name)
-        if self._unsafe:
-            raise QueueAccessError(self._unsafe)
+        if not self._verified:
+            await self.verify_server()  # retried on every attempt: a Redis that was still starting recovers on its own
+        if self._unsafe or not self._verified:
+            raise QueueAccessError(self._unsafe or "could not verify the queue Redis version")
         if not self._dedicated:
             raise QueueAccessError(
                 "queue-mode models need a dedicated queue Redis: set QUEUE_REDIS_URL (they must not share the Redis that "

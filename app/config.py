@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     # belong on a separate instance. Unset = share redis_url (fine for development only).
     queue_redis_url: str | None = None
     model_redis_url: str | None = None  # how model containers reach the queue Redis
+    queue_wake_retry_after: float = 60  # after a failed worker start, wait this long before trying again
     worker_heartbeat_grace: float = 10.0  # wait this long for a worker heartbeat before trusting the container
     queue_acl_secret: str = ""
     admin_api_keys: str = ""

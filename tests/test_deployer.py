@@ -295,3 +295,112 @@ async def test_config_env_change_triggers_redeploy_but_idle_change_does_not(env)
         assert await env.deployer.update_config(s, model, {"env": {"HF_TOKEN": "x"}}) is True
         assert model.state == states.DEPLOYING
         assert model.config == {"idle_timeout_s": 60, "env": {"HF_TOKEN": "x"}}
+
+
+# ───────────── review findings: nothing may strand a model in a busy state ─────────────
+async def test_failure_while_publishing_the_route_does_not_leave_the_model_deploying(env, monkeypatch):
+    mid = await make_model(env)
+    original = env.deployer._set_route
+
+    async def flaky(name, state, mode):
+        if state == "ready":
+            raise RuntimeError("redis exploded")
+        return await original(name, state, mode)
+
+    monkeypatch.setattr(env.deployer, "_set_route", flaky)
+    await deploy(env, mid)
+    model = await get(env)
+    assert model.state == states.FAILED and model.current_digest is None and "redis exploded" in model.state_detail
+    async with env.sm() as s:
+        assert (await list_deployments(s, mid))[0].status == "failed"
+
+
+async def test_a_failing_schema_probe_does_not_fail_the_deploy(env, monkeypatch):
+    async def boom(url):
+        raise RuntimeError("schema endpoint exploded")
+
+    monkeypatch.setattr(env.probe, "schema", boom)
+    mid = await make_model(env)
+    await deploy(env, mid)
+    assert (await get(env)).state == states.READY
+
+
+async def test_backend_error_after_the_container_became_ready_is_still_handled(env, monkeypatch):
+    mid = await make_model(env)
+    await deploy(env, mid, "sha256:a")
+    calls = {"n": 0}
+    original = env.backend.endpoint
+
+    async def flaky(name):
+        calls["n"] += 1
+        if calls["n"] == 4:                       # the call made right after the readiness checks of the upgrade
+            raise BackendError("docker hiccup")
+        return await original(name)
+
+    monkeypatch.setattr(env.backend, "endpoint", flaky)
+    await deploy(env, mid, "sha256:b")
+    assert (await get(env)).state in (states.READY, states.FAILED)   # whichever, never stuck
+    assert (await get(env)).state not in (states.DEPLOYING, states.STARTING)
+
+
+async def test_unexpected_error_during_a_wake_does_not_leave_the_model_starting(env, monkeypatch):
+    mid = await _ready_model(env)
+    async with env.sm() as s:
+        await env.deployer.sleep(s, await get_model_by_name(s, "ecg"))
+        await s.commit()
+    async with env.sm() as s:
+        await env.deployer.begin_wake(s, await get_model_by_name(s, "ecg"))
+        await s.commit()
+    original = env.deployer._set_route
+
+    async def flaky(name, state, mode):
+        if state == "ready":
+            raise RuntimeError("redis exploded")
+        return await original(name, state, mode)
+
+    monkeypatch.setattr(env.deployer, "_set_route", flaky)
+    await env.deployer.run_wake(mid)
+    model = await get(env)
+    assert model.state == states.FAILED and "redis exploded" in model.state_detail
+
+
+async def test_a_removed_model_is_not_resurrected_by_a_deploy_that_was_running(env):
+    mid = await make_model(env)
+    env.backend.never_ready = {"ghcr.io/org/ecg@sha256:a"}
+    env.settings.deploy_timeout = 0.3
+    async with env.sm() as s:
+        await env.deployer.begin(s, await get_model(s, mid), "sha256:a")
+        await s.commit()
+    task = env.deployer.spawn(mid, "sha256:a")
+    await asyncio.sleep(0.1)
+    async with env.sm() as s:                       # an admin removes it while the deploy is still waiting
+        model = await get_model(s, mid)
+        model.state = states.REMOVED
+        await s.commit()
+    await asyncio.wait_for(task, 5)
+    assert (await get(env)).state == states.REMOVED
+    assert await env.redis.exists("route:ecg") == 0
+
+
+async def test_slow_state_updates_while_waiting_for_a_gpu_never_time_the_deploy_out(env, monkeypatch):
+    """The cause of a flaky test: the deadline was extended before a slow DB write, then checked after it."""
+    env.settings.deploy_timeout = 0.2
+    env.backend.gpu_slots = 0
+    original = env.deployer._update
+
+    async def slow(model_id, **fields):
+        if fields.get("state") == states.WAITING_FOR_GPU:
+            await asyncio.sleep(0.4)                # twice the deploy timeout
+        return await original(model_id, **fields)
+
+    monkeypatch.setattr(env.deployer, "_update", slow)
+    mid = await make_model(env, resources=GPU_RES)
+    async with env.sm() as s:
+        await env.deployer.begin(s, await get_model(s, mid), "sha256:a")
+        await s.commit()
+    task = env.deployer.spawn(mid, "sha256:a")
+    await asyncio.sleep(0.7)
+    assert (await get(env)).state == states.WAITING_FOR_GPU
+    env.backend.gpu_slots = 1
+    await asyncio.wait_for(task, 10)
+    assert (await get(env)).state == states.READY

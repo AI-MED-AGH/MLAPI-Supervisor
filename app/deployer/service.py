@@ -175,34 +175,43 @@ class Deployer:
 
             try:
                 await self._deploy_version(model_id, name, mode, digest, first=old_current is None)
+                url = await self._backend.endpoint(name)
+                schema = await self._best_effort_schema(url)
+                new_state = states.READY
+                if mode == "queue" and (await self._backend.status(name)).worker_replicas == 0:
+                    new_state = states.SLEEPING  # the API is up; the worker starts when jobs arrive
+                # publish first, record last: if anything below fails the failure handling below repairs the route
+                await self._set_route(name, states.READY, mode)
+                if schema:
+                    await publish_schema(self._redis, name, schema)
+                async with self._sm() as session:
+                    model = await get_model(session, model_id)
+                    if model.state == states.REMOVED:
+                        return
+                    if old_current and old_current != digest:
+                        model.previous_digest = old_current
+                    model.current_digest = digest
+                    if model.pending_digest == digest:
+                        model.pending_digest = None
+                    model.state, model.state_detail = new_state, None
+                    dep = await session.get(Deployment, deployment_id)
+                    dep.status, dep.finished_at = states.DEP_SUCCEEDED, int(time.time())
+                    await session.commit()
             except (DeployFailed, BackendError) as exc:
                 await self._handle_failure(model_id, name, mode, digest, old_current, deployment_id, str(exc))
                 return
-            except Exception as exc:  # unexpected bug: still never leave the model "deploying"
+            except Exception as exc:  # a bug or an outage anywhere: still never leave the model "deploying"
                 logger.exception("Unexpected error while deploying %s", name)
                 await self._handle_failure(model_id, name, mode, digest, old_current, deployment_id, f"internal error: {exc}")
                 return
-
-            url = await self._backend.endpoint(name)
-            schema = await self._probe.schema(url)
-            new_state = states.READY
-            if mode == "queue" and (await self._backend.status(name)).worker_replicas == 0:
-                new_state = states.SLEEPING  # the API is up; the worker starts when jobs arrive
-            async with self._sm() as session:
-                model = await get_model(session, model_id)
-                if old_current and old_current != digest:
-                    model.previous_digest = old_current
-                model.current_digest = digest
-                if model.pending_digest == digest:
-                    model.pending_digest = None
-                model.state, model.state_detail = new_state, None
-                dep = await session.get(Deployment, deployment_id)
-                dep.status, dep.finished_at = states.DEP_SUCCEEDED, int(time.time())
-                await session.commit()
-            await self._set_route(name, states.READY, mode)
-            if schema:
-                await publish_schema(self._redis, name, schema)
             self._emit("deploy.succeeded", name, digest, new_state)
+
+    async def _best_effort_schema(self, url: str) -> dict | None:
+        try:
+            return await self._probe.schema(url)
+        except Exception:
+            logger.warning("Could not read the schema of a model that just deployed", exc_info=True)
+            return None
 
     async def _deploy_version(self, model_id: int, name: str, mode: str, digest: str, *, first: bool) -> None:
         async with self._sm() as session:
@@ -228,13 +237,16 @@ class Deployer:
             if not status.exists:
                 raise DeployFailed("workload disappeared while waiting for it to become ready")
             if status.pending_reason and "gpu" in status.pending_reason.lower():
-                deadline = loop.time() + self._settings.deploy_timeout  # waiting for a GPU is not a failure
                 if loop.time() > gpu_deadline:
                     raise DeployFailed("gave up waiting for a free GPU slice")
                 if not reported_gpu_wait:
                     reported_gpu_wait = True
                     await self._update(model_id, state=states.WAITING_FOR_GPU, state_detail=status.pending_reason)
                     self._emit("model.waiting_for_gpu", name, None, states.WAITING_FOR_GPU)
+                # waiting for a GPU is not a failure: restart the clock AFTER the awaits above, then poll again
+                deadline = loop.time() + self._settings.deploy_timeout
+                await asyncio.sleep(self._settings.deploy_poll_interval)
+                continue
             elif status.pending_reason and loop.time() > deadline:
                 raise DeployFailed(status.pending_reason)
             elif status.ready:
@@ -264,14 +276,17 @@ class Deployer:
         loop = asyncio.get_running_loop()
         started = loop.time()
         deadline = started + self._settings.deploy_timeout
+        gpu_deadline = started + self._settings.gpu_wait_max
         while True:
             heartbeats = await self._worker_heartbeats(name)
             if any(heartbeats):
                 return
             status = await self._backend.status(name)
             if status.pending_reason and "gpu" in status.pending_reason.lower():
-                deadline = loop.time() + self._settings.deploy_timeout  # waiting for a GPU is not a failure
-                started = loop.time()
+                if loop.time() > gpu_deadline:
+                    raise DeployFailed("gave up waiting for a free GPU slice")
+                started = loop.time()  # the worker is not running yet: the heartbeat grace period has not started
+                deadline = loop.time() + self._settings.deploy_timeout
             elif not heartbeats and status.worker_replicas > 0 and loop.time() - started >= self._settings.worker_heartbeat_grace:
                 logger.info("Worker of %s has no heartbeat; trusting its running container", name)
                 return
@@ -283,6 +298,17 @@ class Deployer:
         self, model_id: int, name: str, mode: str, digest: str, old_current: str | None, deployment_id: int, reason: str
     ) -> None:
         logger.warning("Deploy of %s %s failed: %s", name, digest, reason)
+        async with self._sm() as session:
+            current = await get_model(session, model_id)
+            if current is None or current.state == states.REMOVED:
+                # an admin removed the model while it was deploying: do not bring it back, and tidy what it published
+                await delete_route(self._redis, name)
+                await delete_schema(self._redis, name)
+                try:
+                    await self._backend.delete_model(name, keep_cache=True)
+                except Exception:
+                    logger.warning("Could not clean up the workload of removed model %s", name)
+                return
         rolled_back = False
         if old_current:
             try:
@@ -315,15 +341,18 @@ class Deployer:
         self._emit("deploy.failed", name, digest, final_state, reason=reason, rolled_back=rolled_back)
 
     async def recover_interrupted(self) -> None:
-        """After a restart, no deploy task is running: repair models stuck in a busy state."""
+        """After a restart no deploy task is running. A first deploy is marked failed; a model that was already serving
+        is deployed again from its recorded version, because the cluster may hold a half-applied newer one."""
         from sqlalchemy import select
 
+        redeploy: list[tuple[int, str]] = []
         async with self._sm() as session:
             busy = (await session.scalars(select(Model).where(Model.state.in_(BUSY_STATES)))).all()
             for model in busy:
                 logger.warning("Model %s was %s when the supervisor stopped", model.name, model.state)
                 if model.current_digest:
                     model.state, model.state_detail = states.READY, "a deploy was interrupted by a restart"
+                    redeploy.append((model.id, model.current_digest))
                 else:
                     model.state, model.state_detail = states.FAILED, "deploy interrupted by a supervisor restart"
                 running = (
@@ -334,6 +363,15 @@ class Deployer:
                 for dep in running:
                     dep.status, dep.reason, dep.finished_at = states.DEP_FAILED, "interrupted by restart", int(time.time())
             await session.commit()
+        for model_id, digest in redeploy:
+            async with self._sm() as session:
+                model = await get_model(session, model_id)
+                try:
+                    await self.begin(session, model, digest)
+                except Conflict:
+                    continue
+                await session.commit()
+            self.spawn(model_id, digest)
 
     # ───────────── admin operations ─────────────
     async def redeploy(self, session, model: Model) -> str:
@@ -386,13 +424,28 @@ class Deployer:
                 else:
                     await self._backend.scale(name, 1, role="worker")
                     await self._wait_worker_ready(name)
-            except (DeployFailed, BackendError) as exc:
-                await self._update(model_id, state=states.FAILED, state_detail=f"wake failed: {exc}")
-                await self._set_route(name, "unavailable", mode)
-                self._emit("deploy.failed", name, digest, states.FAILED, reason=f"wake failed: {exc}", rolled_back=False)
+                await self._set_route(name, states.READY, mode)
+                await self._update(model_id, state=states.READY, state_detail=None)
+            except Exception as exc:
+                if not isinstance(exc, (DeployFailed, BackendError)):
+                    logger.exception("Unexpected error while waking %s", name)
+                reason = f"wake failed: {exc}"
+                if mode == "queue":
+                    # the API still takes jobs; stop the broken worker and let the scaler retry after a cooldown
+                    try:
+                        await self._backend.scale(name, 0, role="worker")
+                    except Exception:
+                        logger.warning("Could not stop the worker of %s after a failed start", name)
+                    await self._update(model_id, state=states.SLEEPING, state_detail=reason)
+                else:
+                    await self._update(model_id, state=states.FAILED, state_detail=reason)
+                    try:
+                        await self._set_route(name, "unavailable", mode)
+                    except Exception:
+                        logger.warning("Could not mark %s unavailable", name)
+                self._emit("deploy.failed", name, digest, states.SLEEPING if mode == "queue" else states.FAILED,
+                           reason=reason, rolled_back=False)
                 return
-            await self._update(model_id, state=states.READY, state_detail=None)
-            await self._set_route(name, states.READY, mode)
             self._emit("model.woke", name, digest, states.READY)
 
     async def remove(self, session, model: Model, *, keep_cache: bool = False) -> None:

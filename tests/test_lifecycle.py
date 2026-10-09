@@ -143,7 +143,7 @@ async def test_no_jobs_means_worker_stays_down(env):
     assert (await env.backend.status("ecg")).worker_replicas == 0
 
 
-async def test_worker_that_never_loads_the_model_fails_the_wake(env):
+async def test_worker_that_never_loads_the_model_goes_back_to_sleep_and_is_stopped(env):
     env.settings.deploy_timeout = 0.2
     await _ready_model(env, mode="queue")
     await env.redis.lpush("fastmlapi:ecg:pending", "job1")
@@ -151,7 +151,40 @@ async def test_worker_that_never_loads_the_model_fails_the_wake(env):
     await scaler(env).tick()
     await env.deployer.drain()
     model = await get(env)
-    assert model.state == states.FAILED and "worker" in model.state_detail
+    assert model.state == states.SLEEPING and "wake failed" in model.state_detail     # not FAILED: jobs must not pile up forever
+    assert (await env.backend.status("ecg")).worker_replicas == 0
+    assert json.loads(await env.redis.get("route:ecg"))["state"] == "ready"          # the API still accepts jobs
+
+
+async def test_a_failed_wake_is_retried_only_after_a_cooldown(env):
+    env.settings.deploy_timeout = 0.2
+    env.settings.queue_wake_retry_after = 60
+    await _ready_model(env, mode="queue")
+    await env.redis.lpush("fastmlapi:ecg:pending", "job1")
+    await worker_alive(env, loaded="false")
+    await scaler(env).tick()
+    await env.deployer.drain()
+    failed_at = (await get(env)).updated_at
+    assert await scaler(env, now=failed_at + 10).tick() == []                        # too soon
+    await worker_alive(env, loaded="true")
+    assert await scaler(env, now=failed_at + 100).tick() == ["ecg"]                  # cooldown over: try again
+    await env.deployer.drain()
+    assert (await get(env)).state == states.READY
+
+
+async def test_a_worker_waiting_for_a_gpu_gives_up_after_the_gpu_wait_limit(env):
+    from tests.support import GPU_RES
+
+    env.settings.gpu_wait_max = 0.2
+    env.settings.deploy_timeout = 5
+    env.backend.gpu_slots = 0
+    await _ready_model(env, mode="queue", resources=GPU_RES)
+    await env.redis.lpush("fastmlapi:ecg:pending", "job1")
+    await scaler(env).tick()
+    await asyncio.wait_for(env.deployer.drain(), 10)
+    model = await get(env)
+    assert model.state == states.SLEEPING and "GPU" in model.state_detail
+    assert (await env.backend.status("ecg")).worker_replicas == 0
 
 
 async def _running_queue_model(env):
@@ -276,7 +309,8 @@ async def test_a_worker_that_reports_not_loaded_is_not_trusted_even_after_the_gr
     await worker_alive(env, loaded="false")                          # a heartbeat exists: strict mode
     await scaler(env).tick()
     await env.deployer.drain()
-    assert (await get(env)).state == states.FAILED
+    model = await get(env)
+    assert model.state == states.SLEEPING and "wake failed" in model.state_detail
 
 
 async def test_queue_data_lives_in_the_queue_redis_not_the_control_redis(env):

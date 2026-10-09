@@ -13,6 +13,10 @@ class RecordingRedis:
     def __init__(self):
         self.commands = []
         self.fail = None
+        self.version = "7.4.0"
+
+    async def info(self, section=None):
+        return {"redis_version": self.version}
 
     async def execute_command(self, *args):
         self.commands.append(args)
@@ -200,16 +204,33 @@ async def test_redis_7_and_newer_are_accepted(version):
     assert (await qa.provision("ecg")).startswith("redis://m_ecg:")
 
 
-async def test_unreachable_server_during_verification_is_not_fatal_but_provision_still_fails_cleanly():
+async def test_a_server_whose_version_cannot_be_read_is_refused_not_trusted():
     class Down(RecordingRedis):
         async def info(self, section=None):
             raise RuntimeError("down")
 
     qa, redis = make(redis=Down())
-    await qa.verify_server()                         # must not raise at startup
-    redis.fail = RuntimeError("down")
+    await qa.verify_server()                         # never raises at startup ...
+    with pytest.raises(QueueAccessError, match="version"):
+        await qa.provision("ecg")                    # ... but provisioning fails closed
+    assert redis.commands == []
+
+
+async def test_verification_is_retried_so_a_late_starting_redis_recovers():
+    class Late(RecordingRedis):
+        up = False
+
+        async def info(self, section=None):
+            if not self.up:
+                raise RuntimeError("starting")
+            return {"redis_version": "7.4.0"}
+
+    qa, redis = make(redis=Late())
+    await qa.verify_server()
     with pytest.raises(QueueAccessError):
         await qa.provision("ecg")
+    redis.up = True
+    assert (await qa.provision("ecg")).startswith("redis://m_ecg:")
 
 
 async def test_queue_models_refuse_to_share_a_redis_with_routes_and_keys():

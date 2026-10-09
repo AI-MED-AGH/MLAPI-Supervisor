@@ -30,16 +30,18 @@ class QueueScaler:
     async def tick(self) -> list[str]:
         async with self._sm() as session:
             queue_models = [
-                (m.id, m.name, m.state, (m.config or {}).get("idle_timeout_s", self._settings.default_idle_timeout))
+                (m.id, m.name, m.state, (m.config or {}).get("idle_timeout_s", self._settings.default_idle_timeout),
+                 m.state_detail or "", m.updated_at or 0)
                 for m in await list_models(session)
                 if m.mode == "queue" and m.state in (states.READY, states.SLEEPING)
             ]
         changed: list[str] = []
         now = self._clock()
-        for model_id, name, state, idle_timeout in queue_models:
+        for model_id, name, state, idle_timeout, detail, updated_at in queue_models:
             if await self._work(name) > 0:
                 self._empty_since.pop(name, None)
-                if state == states.SLEEPING and await self._start_worker(model_id):
+                recently_failed = detail.startswith("wake failed") and now - updated_at < self._settings.queue_wake_retry_after
+                if state == states.SLEEPING and not recently_failed and await self._start_worker(model_id):
                     changed.append(name)
             elif state == states.READY:
                 since = self._empty_since.setdefault(name, now)
