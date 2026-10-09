@@ -6,6 +6,8 @@ from httpx import ASGITransport, AsyncClient, ConnectError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
+from app.auth import hash_admin_key
+from app.config import Settings
 from app.main import app
 from app.watchman import Base
 from app.watchman.database import get_session
@@ -17,6 +19,8 @@ from app.watchman.queries import (
 from app.watchman.schemas import SubscriptionSchema
 
 pytestmark = pytest.mark.asyncio
+
+ADMIN_KEY = "watchman-test-admin"
 
 DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 test_engine = create_async_engine(DATABASE_URL,
@@ -45,40 +49,45 @@ async def client(get_test_session):
 
 
     app.dependency_overrides[get_session] = override_get_session
+    previous_settings = app.state.settings
+    app.state.settings = Settings(_env_file=None, admin_api_keys=hash_admin_key(ADMIN_KEY))
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+    async with AsyncClient(
+        transport=transport, base_url="http://testserver", headers={"X-Admin-Key": ADMIN_KEY}
+    ) as client:
         yield client
 
+    app.state.settings = previous_settings
     app.dependency_overrides.clear()
 
 async def test_subscribe(client):
-    response = await client.post("/observers/", json={"webhook_url":"0.0.0.0:8000", "wrong":["error"]})
+    response = await client.post("/v1/observers/", json={"webhook_url":"http://0.0.0.0:8000", "wrong":["error"]})
     assert response.status_code == 422
 
-    response = await client.post("/observers/", json={"webhook_url":"0.0.0.0:8000", "event_types":["error"]})
+    response = await client.post("/v1/observers/", json={"webhook_url":"http://0.0.0.0:8000", "event_types":["error"]})
     assert response.status_code == 201
 
 async def test_insert_subscription(client, get_test_session):
-    response = await client.post("/observers/", json={"webhook_url":"0.0.0.0:8000", "event_types":["error"]})
+    response = await client.post("/v1/observers/", json={"webhook_url":"http://0.0.0.0:8000", "event_types":["error"]})
     assert response.status_code == 201
     observers = await get_observers_subscribed_to_event(get_test_session, "error")
-    assert str(observers) == "[Observer(id=1, webhook_url='0.0.0.0:8000')]"
+    assert str(observers) == "[Observer(id=1, webhook_url='http://0.0.0.0:8000')]"
 
-    response = await client.post("/observers/", json={"webhook_url":"0.0.0.0:8001", "event_types":["error"]})
+    response = await client.post("/v1/observers/", json={"webhook_url":"http://0.0.0.0:8001", "event_types":["error"]})
     assert response.status_code == 201
     observers = await get_observers_subscribed_to_event(get_test_session, "error")
-    assert str(observers) == "[Observer(id=1, webhook_url='0.0.0.0:8000'), Observer(id=2, webhook_url='0.0.0.0:8001')]"
+    assert str(observers) == "[Observer(id=1, webhook_url='http://0.0.0.0:8000'), Observer(id=2, webhook_url='http://0.0.0.0:8001')]"
 
 async def test_notify_subscribers(client, get_test_session):
-    response = await client.post("/observers/", json={"webhook_url":"0.0.0.0:8000", "event_types":["error"]})
+    response = await client.post("/v1/observers/", json={"webhook_url":"http://0.0.0.0:8000", "event_types":["error"]})
     assert response.status_code == 201
     observers = await get_observers_subscribed_to_event(get_test_session, "error")
-    assert str(observers) == "[Observer(id=1, webhook_url='0.0.0.0:8000')]"
+    assert str(observers) == "[Observer(id=1, webhook_url='http://0.0.0.0:8000')]"
 
-    response = await client.post("/observers/", json={"webhook_url":"0.0.0.0:8001", "event_types":["error"]})
+    response = await client.post("/v1/observers/", json={"webhook_url":"http://0.0.0.0:8001", "event_types":["error"]})
     assert response.status_code == 201
     observers = await get_observers_subscribed_to_event(get_test_session, "error")
-    assert str(observers) == "[Observer(id=1, webhook_url='0.0.0.0:8000'), Observer(id=2, webhook_url='0.0.0.0:8001')]"
+    assert str(observers) == "[Observer(id=1, webhook_url='http://0.0.0.0:8000'), Observer(id=2, webhook_url='http://0.0.0.0:8001')]"
 
 @patch("httpx.AsyncClient.post", new_callable=AsyncMock)
 async def test_notify_success(mock_post,get_test_session):

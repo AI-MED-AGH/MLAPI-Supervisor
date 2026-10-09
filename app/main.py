@@ -1,8 +1,9 @@
 from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 
+from app.auth import require_admin
 from app.config import Settings, get_settings
 from app.db import Base, engine
 from app.keys.api import router as keys_router
@@ -43,7 +44,7 @@ def create_app(settings: Settings | None = None, *, redis=None) -> FastAPI:
     def health_check() -> dict[str, str]:
         return {"status": "ok"}
 
-    app.include_router(watchmanRouter, prefix="/observers")
+    app.include_router(watchmanRouter, prefix="/v1/observers", dependencies=[Depends(require_admin)])
     app.include_router(keys_router)
     return app
 

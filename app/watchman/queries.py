@@ -48,3 +48,13 @@ async def insert_new_subscription(session: AsyncSession, subscription:Subscripti
             observer.subscriptions.append(Subscription(event_type=event_type))
 
     await session.flush()
+
+
+async def list_observers(session: AsyncSession) -> Sequence[Observer]:
+    """Returns every observer with its subscriptions loaded."""
+    query: Select = select(Observer).options(selectinload(Observer.subscriptions)).order_by(Observer.id)
+    return (await session.scalars(query)).all()
+
+
+async def get_observer(session: AsyncSession, observer_id: int) -> Observer | None:
+    return await session.get(Observer, observer_id)
