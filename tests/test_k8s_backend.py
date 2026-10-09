@@ -90,7 +90,7 @@ def test_service_pvc_and_network_policy():
     redis_rules = [r for r in policy["spec"]["egress"] if any("redis" in str(t) for t in r["to"])]
     assert redis_rules == []                                           # sync models never need Redis
     queue_policy = m.network_policy(spec(mode="queue"), S)
-    assert any("mlapi-redis" in str(r) for r in queue_policy["spec"]["egress"])
+    assert any("mlapi-queue-redis" in str(r) for r in queue_policy["spec"]["egress"])
 
 
 def test_manifests_serialise_to_valid_yaml():

@@ -20,18 +20,36 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
 
+  # A second Redis only for queue-mode (long-running job) models. Their code may run Lua scripts against it, and a
+  # script can hang a Redis server, so the queues must not share an instance with routes and API keys.
+  queue-redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${QUEUE_REDIS_PASSWORD:?set QUEUE_REDIS_PASSWORD in .env}", "--save", "", "--appendonly", "no",
+              "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    networks: [models]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${QUEUE_REDIS_PASSWORD}
+
   supervisor:
     build: .
     image: mlapi-supervisor:local
     restart: unless-stopped
     depends_on:
       redis: {condition: service_healthy}
+      queue-redis: {condition: service_healthy}
     environment:
       CLUSTER_BACKEND: docker
       DOCKER_NETWORK: mlapi-models
       DATA_DIR: /data
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
-      MODEL_REDIS_URL: redis://redis:6379/0
+      QUEUE_REDIS_URL: redis://:${QUEUE_REDIS_PASSWORD}@queue-redis:6379/0
+      MODEL_REDIS_URL: redis://queue-redis:6379/0
       ADMIN_API_KEYS: ${ADMIN_API_KEYS:?set ADMIN_API_KEYS in .env (python -m app.admin_key)}
       QUEUE_ACL_SECRET: ${QUEUE_ACL_SECRET:-}
       GHCR_ORG: ${GHCR_ORG:-}

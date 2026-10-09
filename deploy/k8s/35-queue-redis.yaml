@@ -1,0 +1,44 @@
+# A separate Redis for queue-mode (long-running job) models. Model code can run Lua scripts against it, and a
+# script can hang a Redis server, so it must never share an instance with the routes and API keys.
+#   kubectl -n mlapi-system create secret generic mlapi-queue-redis --from-literal=password="$(openssl rand -hex 24)"
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlapi-queue-redis
+  namespace: mlapi-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: mlapi-queue-redis}
+  template:
+    metadata:
+      labels: {app: mlapi-queue-redis}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: redis
+          image: redis:7.4-alpine
+          # no persistence (payloads may be sensitive); bounded memory that refuses writes instead of evicting jobs
+          args: ["--requirepass", "$(REDIS_PASSWORD)", "--save", "", "--appendonly", "no",
+                 "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: mlapi-queue-redis, key: password}}
+          ports: [{containerPort: 6379}]
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: "1", memory: 768Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 999
+            capabilities: {drop: ["ALL"]}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlapi-queue-redis
+  namespace: mlapi-system
+spec:
+  selector: {app: mlapi-queue-redis}
+  ports: [{port: 6379, targetPort: 6379}]

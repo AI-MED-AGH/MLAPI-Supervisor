@@ -75,3 +75,14 @@ def test_system_containers_are_hardened(name):
 def test_time_slicing_config_advertises_four_replicas():
     cm = by_kind("ConfigMap")[0]
     assert yaml.safe_load(cm["data"]["any"])["sharing"]["timeSlicing"]["resources"][0]["replicas"] == 4
+
+
+def test_queue_redis_is_separate_from_the_control_redis():
+    deployments = {d["metadata"]["name"]: d for d in by_kind("Deployment")}
+    control, queue = deployments["mlapi-redis"], deployments["mlapi-queue-redis"]
+    assert control["spec"]["template"]["metadata"]["labels"] != queue["spec"]["template"]["metadata"]["labels"]
+    args = queue["spec"]["template"]["spec"]["containers"][0]["args"]
+    assert "--requirepass" in args and "--maxmemory" in args and args[args.index("--maxmemory-policy") + 1] == "noeviction"
+    secrets = {e["valueFrom"]["secretKeyRef"]["name"] for c in (control, queue)
+               for e in c["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert secrets == {"mlapi-redis", "mlapi-queue-redis"}            # different passwords

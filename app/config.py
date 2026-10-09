@@ -9,8 +9,11 @@ class Settings(BaseSettings):
     data_dir: str = "./data"
     database_url: str | None = None
     redis_url: str = "redis://localhost:6379/0"
-    redis_admin_url: str | None = None
-    model_redis_url: str | None = None  # how model containers reach Redis (defaults to redis_url's host)
+    # Queue-mode models run untrusted code against Redis (Lua scripts can hang a Redis server), so their queues
+    # belong on a separate instance. Unset = share redis_url (fine for development only).
+    queue_redis_url: str | None = None
+    model_redis_url: str | None = None  # how model containers reach the queue Redis
+    worker_heartbeat_grace: float = 10.0  # wait this long for a worker heartbeat before trusting the container
     queue_acl_secret: str = ""
     admin_api_keys: str = ""
     auto_migrate: bool = True
@@ -22,7 +25,7 @@ class Settings(BaseSettings):
     docker_publish_ports: bool = False  # dev: publish model ports on 127.0.0.1 (Supervisor/Router run on the host)
     router_selector: str = "app=mlapi-router"
     supervisor_selector: str = "app=mlapi-supervisor"
-    redis_selector: str = "app=mlapi-redis"
+    redis_selector: str = "app=mlapi-queue-redis"  # what queue-mode pods may reach
     k8s_image_pull_secret: str | None = "ghcr-pull"
     kubeconfig: str | None = None
 

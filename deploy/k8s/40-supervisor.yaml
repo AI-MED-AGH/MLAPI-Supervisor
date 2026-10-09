@@ -1,7 +1,9 @@
 # Create the environment secret first (see docs/runbook.md):
 #   kubectl -n mlapi-system create secret generic mlapi-supervisor-env \
 #     --from-literal=ADMIN_API_KEYS=<sha256 of your admin key> --from-literal=GHCR_TOKEN=<read:packages token> \
-#     --from-literal=REDIS_URL=redis://:<password>@mlapi-redis:6379/0 --from-literal=REDIS_ADMIN_URL=redis://:<password>@mlapi-redis:6379/0
+#     --from-literal=REDIS_URL=redis://:<password>@mlapi-redis:6379/0 \
+#     --from-literal=QUEUE_REDIS_URL=redis://:<queue password>@mlapi-queue-redis:6379/0 \
+#     --from-literal=MODEL_REDIS_URL=redis://mlapi-queue-redis.mlapi-system.svc:6379/0 --from-literal=QUEUE_ACL_SECRET=<random>
 # The Supervisor is reachable inside the cluster only: reach it with `kubectl port-forward`, never an Ingress.
 apiVersion: apps/v1
 kind: Deployment

@@ -44,6 +44,8 @@ def create_app(
             if settings.run_background:
                 app.state.services = build_services(app)
                 await app.state.services.deployer.recover_interrupted()
+                if app.state.services.queue_access is not None:
+                    await app.state.services.queue_access.verify_server()
                 background = build_background(app.state.services, app.state)
                 background.start()
             yield
@@ -51,6 +53,7 @@ def create_app(
             if background is not None:
                 await background.stop()
                 await app.state.services.events.drain()
+                await app.state.services.aclose()
             for close in owned:
                 await close()
 

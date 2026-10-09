@@ -17,6 +17,12 @@ class Services:
     registry: RegistryService
     deployer: Deployer
     queue_access: object | None = None
+    queue_redis: object | None = None
+    _owned: tuple = ()
+
+    async def aclose(self) -> None:
+        for resource in self._owned:
+            await resource.aclose()
 
 
 def build_inspector(state, backend):
@@ -41,7 +47,17 @@ def build_inspector(state, backend):
     return CompositeInspector(local=local, ghcr=ghcr)
 
 
-def build_queue_access(state):
+def build_queue_redis(state):
+    """Returns (client, owned): the dedicated queue Redis when configured, else the shared one."""
+    if state.settings.queue_redis_url:
+        import redis.asyncio as aioredis
+
+        client = aioredis.from_url(state.settings.queue_redis_url, decode_responses=True)
+        return client, (client,)
+    return state.redis, ()
+
+
+def build_queue_access(state, queue_redis=None):
     """Per-model Redis ACL users need a master secret; without one queue-mode models cannot deploy."""
     from urllib.parse import urlsplit, urlunsplit
 
@@ -50,16 +66,14 @@ def build_queue_access(state):
     settings = state.settings
     if not settings.queue_acl_secret:
         return None
-    admin = state.redis
-    if settings.redis_admin_url:
-        import redis.asyncio as aioredis
-
-        admin = aioredis.from_url(settings.redis_admin_url, decode_responses=True)
+    admin = queue_redis or state.redis
     base = settings.model_redis_url
     if not base:
         parts = urlsplit(settings.redis_url)
         base = urlunsplit((parts.scheme, parts.netloc.rpartition("@")[2], parts.path, "", ""))
-    return QueueAccess(admin, secret=settings.queue_acl_secret, model_redis_url=base)
+    return QueueAccess(
+        admin, secret=settings.queue_acl_secret, model_redis_url=base, dedicated=bool(settings.queue_redis_url)
+    )
 
 
 def build_services(app: FastAPI) -> Services:
@@ -70,7 +84,8 @@ def build_services(app: FastAPI) -> Services:
     state.backend = backend
     probe = state.probe or HttpProbe()
     events = EventBus(state.sessionmaker)
-    queue_access = getattr(state, "queue_access", None) or build_queue_access(state)
+    queue_redis, owned = build_queue_redis(state)
+    queue_access = getattr(state, "queue_access", None) or build_queue_access(state, queue_redis)
     deployer = Deployer(
         sessionmaker=state.sessionmaker,
         backend=backend,
@@ -79,6 +94,7 @@ def build_services(app: FastAPI) -> Services:
         probe=probe,
         settings=state.settings,
         queue_access=queue_access,
+        queue_redis=queue_redis,
     )
     return Services(
         backend=backend,
@@ -88,6 +104,8 @@ def build_services(app: FastAPI) -> Services:
         registry=RegistryService(events),
         deployer=deployer,
         queue_access=queue_access,
+        queue_redis=queue_redis,
+        _owned=owned,
     )
 
 

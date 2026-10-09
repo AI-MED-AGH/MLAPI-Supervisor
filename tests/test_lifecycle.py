@@ -255,3 +255,42 @@ async def test_reconciler_leaves_busy_models_alone(env):
     await reconciler(env).tick()
     await env.deployer.drain()
     assert env.backend.models == {}
+
+
+# ───────────── workers without a heartbeat (current fastmlapi) and a separate queue Redis ─────────────
+async def test_worker_without_any_heartbeat_is_trusted_after_the_grace_period(env):
+    env.settings.worker_heartbeat_grace = 0.15
+    await _ready_model(env, mode="queue")
+    await env.redis.lpush("fastmlapi:ecg:pending", "job1")           # no worker heartbeat key is ever written
+    await scaler(env).tick()
+    await env.deployer.drain()
+    assert (await get(env)).state == states.READY
+    assert (await env.backend.status("ecg")).worker_replicas == 1
+
+
+async def test_a_worker_that_reports_not_loaded_is_not_trusted_even_after_the_grace_period(env):
+    env.settings.worker_heartbeat_grace = 0.05
+    env.settings.deploy_timeout = 0.3
+    await _ready_model(env, mode="queue")
+    await env.redis.lpush("fastmlapi:ecg:pending", "job1")
+    await worker_alive(env, loaded="false")                          # a heartbeat exists: strict mode
+    await scaler(env).tick()
+    await env.deployer.drain()
+    assert (await get(env)).state == states.FAILED
+
+
+async def test_queue_data_lives_in_the_queue_redis_not_the_control_redis(env):
+    from fakeredis import FakeAsyncRedis
+
+    queue_redis = FakeAsyncRedis(decode_responses=True)
+    env.deployer._queue_redis = queue_redis
+    await _ready_model(env, mode="queue")
+    await queue_redis.lpush("fastmlapi:ecg:pending", "job1")
+    await queue_redis.hset("fastmlapi:ecg:workers:w1", mapping={"model_loaded": "true"})
+    sc = QueueScaler(sessionmaker=env.sm, deployer=env.deployer, redis=queue_redis, backend=env.backend,
+                     settings=env.settings, clock=lambda: NOW)
+    assert await sc.tick() == ["ecg"]
+    await env.deployer.drain()
+    assert (await get(env)).state == states.READY
+    assert await env.redis.keys("fastmlapi:*") == []                 # nothing queue-related in the control Redis
+    await queue_redis.aclose()

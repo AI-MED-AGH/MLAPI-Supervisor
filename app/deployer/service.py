@@ -74,10 +74,12 @@ class Deployer:
         probe,
         settings: Settings,
         queue_access=None,
+        queue_redis=None,
     ):
         self._sm = sessionmaker
         self._backend = backend
         self._redis = redis
+        self._queue_redis = queue_redis or redis  # where fastmlapi's queue keys live
         self._events = events
         self._probe = probe
         self._settings = settings
@@ -248,21 +250,31 @@ class Deployer:
                 raise DeployFailed("timed out waiting for the model to become ready")
             await asyncio.sleep(self._settings.deploy_poll_interval)
 
-    async def _worker_loaded(self, name: str) -> bool:
-        """True when a live worker reports that its model is loaded (fastmlapi heartbeat keys)."""
-        async for key in self._redis.scan_iter(match=f"fastmlapi:{name}:workers:*"):
-            loaded = await self._redis.hget(key, "model_loaded")
-            if loaded is not None and str(loaded).lower() in ("true", "1"):
-                return True
-        return False
+    async def _worker_heartbeats(self, name: str) -> list[bool]:
+        """`model_loaded` of every worker heartbeat key fastmlapi has written for this model."""
+        loaded: list[bool] = []
+        async for key in self._queue_redis.scan_iter(match=f"fastmlapi:{name}:workers:*"):
+            value = await self._queue_redis.hget(key, "model_loaded")
+            loaded.append(value is not None and str(value).lower() in ("true", "1"))
+        return loaded
 
     async def _wait_worker_ready(self, name: str) -> None:
+        """Ready = a worker reports a loaded model. Workers that never write a heartbeat (older fastmlapi) are trusted once
+        their container has been up for `worker_heartbeat_grace`; a worker that does report `not loaded` is never trusted."""
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._settings.deploy_timeout
-        while not await self._worker_loaded(name):
+        started = loop.time()
+        deadline = started + self._settings.deploy_timeout
+        while True:
+            heartbeats = await self._worker_heartbeats(name)
+            if any(heartbeats):
+                return
             status = await self._backend.status(name)
             if status.pending_reason and "gpu" in status.pending_reason.lower():
                 deadline = loop.time() + self._settings.deploy_timeout  # waiting for a GPU is not a failure
+                started = loop.time()
+            elif not heartbeats and status.worker_replicas > 0 and loop.time() - started >= self._settings.worker_heartbeat_grace:
+                logger.info("Worker of %s has no heartbeat; trusting its running container", name)
+                return
             if loop.time() > deadline:
                 raise DeployFailed("worker did not report a loaded model in time")
             await asyncio.sleep(self._settings.deploy_poll_interval)

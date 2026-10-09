@@ -21,9 +21,9 @@ class RecordingRedis:
         return b"OK"
 
 
-def make(redis=None, secret=SECRET, base="redis://redis.internal:6380/2"):
+def make(redis=None, secret=SECRET, base="redis://redis.internal:6380/2", dedicated=True):
     redis = redis or RecordingRedis()
-    return QueueAccess(redis, secret=secret, model_redis_url=base), redis
+    return QueueAccess(redis, secret=secret, model_redis_url=base, dedicated=dedicated), redis
 
 
 async def test_user_is_limited_to_the_models_key_prefix_and_safe_commands():
@@ -38,7 +38,7 @@ async def test_user_is_limited_to_the_models_key_prefix_and_safe_commands():
     assert "resetchannels" in rules and not any(r.startswith("&") for r in rules)  # no pub/sub channels
     assert rules.index("-@all") < rules.index("+@list")                          # deny everything, then allow
     for dangerous in ("+@admin", "+@dangerous", "+@scripting", "+@pubsub", "+@all", "+@keyspace", "+@connection",
-                      "+flushall", "+flushdb", "+swapdb", "+config", "+acl", "+keys", "+scan", "+eval", "+shutdown", "+debug"):
+                      "+flushall", "+flushdb", "+swapdb", "+config", "+acl", "+keys", "+eval", "+shutdown", "+debug"):
         assert dangerous not in rules
 
 
@@ -49,7 +49,17 @@ def test_only_data_structure_categories_and_named_commands_are_granted():
     categories = {r for r in MODEL_COMMANDS if r.startswith("+@")}
     assert categories == {"+@list", "+@hash", "+@string", "+@set", "+@sortedset"}
     named = {r for r in MODEL_COMMANDS if r.startswith("+") and not r.startswith("+@")}
-    assert not named & {"+flushall", "+flushdb", "+swapdb", "+keys", "+scan", "+randomkey", "+move", "+rename", "+dbsize", "+info"}
+    assert not named & {"+flushall", "+flushdb", "+swapdb", "+keys", "+randomkey", "+move", "+rename", "+dbsize", "+info",
+                        "+eval", "+eval_ro", "+script|flush", "+script|kill", "+script", "+shutdown", "+config", "+acl", "+debug"}
+
+
+def test_commands_fastmlapi_needs_are_allowed():
+    """Found by running the real fastmlapi worker against a real Redis: it uses TIME, Lua scripts (EVALSHA + SCRIPT LOAD),
+    MULTI/EXEC pipelines and SCAN. Without these the queue cannot work."""
+    from app.queue_access.acl import MODEL_COMMANDS
+
+    for needed in ("+time", "+evalsha", "+script|load", "+multi", "+exec", "+scan"):
+        assert needed in MODEL_COMMANDS
 
 
 async def test_returned_url_points_at_the_model_redis_with_the_model_user():
@@ -162,3 +172,65 @@ async def test_reconciler_reprovisions_users_after_a_redis_restart(env):
     await Reconciler(sessionmaker=env.sm, deployer=env.deployer, redis=env.redis, backend=env.backend,
                      probe=env.probe, queue_access=qa).tick()
     assert [c[:3] for c in redis.commands] == [("ACL", "SETUSER", "m_ecg")]
+
+
+# ───────────── SCAN is only safe where Redis filters it by key permissions (Redis >= 7) ─────────────
+class InfoRedis(RecordingRedis):
+    def __init__(self, version):
+        super().__init__()
+        self.version = version
+
+    async def info(self, section=None):
+        return {"redis_version": self.version}
+
+
+@pytest.mark.parametrize("version", ["6.2.14", "5.0.7", "6.0.0"])
+async def test_old_redis_versions_are_refused_for_queue_models(version):
+    qa, redis = make(redis=InfoRedis(version))
+    await qa.verify_server()
+    with pytest.raises(QueueAccessError, match="7"):
+        await qa.provision("ecg")
+    assert redis.commands == []
+
+
+@pytest.mark.parametrize("version", ["7.0.0", "7.4.1", "8.0.2"])
+async def test_redis_7_and_newer_are_accepted(version):
+    qa, redis = make(redis=InfoRedis(version))
+    await qa.verify_server()
+    assert (await qa.provision("ecg")).startswith("redis://m_ecg:")
+
+
+async def test_unreachable_server_during_verification_is_not_fatal_but_provision_still_fails_cleanly():
+    class Down(RecordingRedis):
+        async def info(self, section=None):
+            raise RuntimeError("down")
+
+    qa, redis = make(redis=Down())
+    await qa.verify_server()                         # must not raise at startup
+    redis.fail = RuntimeError("down")
+    with pytest.raises(QueueAccessError):
+        await qa.provision("ecg")
+
+
+async def test_queue_models_refuse_to_share_a_redis_with_routes_and_keys():
+    """SCAN would list the names of every key (API key ids, model names) in a shared Redis, and a model's Lua script can
+    hang it for everyone, so a dedicated queue Redis is mandatory."""
+    qa, redis = make(dedicated=False)
+    with pytest.raises(QueueAccessError, match="QUEUE_REDIS_URL"):
+        await qa.provision("ecg")
+    assert redis.commands == []
+
+
+def test_services_only_mark_the_queue_redis_dedicated_when_one_is_configured():
+    from types import SimpleNamespace
+
+    from app.config import Settings
+    from app.services import build_queue_access
+
+    shared = SimpleNamespace(settings=Settings(_env_file=None, queue_acl_secret="s"), redis=RecordingRedis())
+    assert build_queue_access(shared, shared.redis)._dedicated is False
+    dedicated = SimpleNamespace(
+        settings=Settings(_env_file=None, queue_acl_secret="s", queue_redis_url="redis://:p@queue-redis:6379/0"),
+        redis=RecordingRedis(),
+    )
+    assert build_queue_access(dedicated, RecordingRedis())._dedicated is True

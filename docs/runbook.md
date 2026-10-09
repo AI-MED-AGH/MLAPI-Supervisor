@@ -80,7 +80,8 @@ pauses the rollout until an admin approves; the previous version keeps running.
 ```shell
 kubectl apply -f deploy/k8s/00-namespaces.yaml -f deploy/k8s/10-rbac.yaml -f deploy/k8s/20-quota.yaml
 kubectl -n mlapi-system create secret generic mlapi-redis --from-literal=password="$(openssl rand -hex 24)"
-kubectl apply -f deploy/k8s/30-redis.yaml
+kubectl -n mlapi-system create secret generic mlapi-queue-redis --from-literal=password="$(openssl rand -hex 24)"
+kubectl apply -f deploy/k8s/30-redis.yaml -f deploy/k8s/35-queue-redis.yaml
 # image pull secret so the cluster can pull private model images from GHCR
 kubectl -n mlapi-models create secret docker-registry ghcr-pull --docker-server=ghcr.io \
         --docker-username=<user> --docker-password=<token with read:packages>
@@ -88,8 +89,8 @@ kubectl -n mlapi-models create secret docker-registry ghcr-pull --docker-server=
 kubectl -n mlapi-system create secret generic mlapi-supervisor-env \
   --from-literal=ADMIN_API_KEYS=<hash> --from-literal=GHCR_TOKEN=<token> \
   --from-literal=REDIS_URL=redis://:<password>@mlapi-redis:6379/0 \
-  --from-literal=REDIS_ADMIN_URL=redis://:<password>@mlapi-redis:6379/0 \
-  --from-literal=MODEL_REDIS_URL=redis://mlapi-redis.mlapi-system.svc:6379/0 \
+  --from-literal=QUEUE_REDIS_URL=redis://:<queue password>@mlapi-queue-redis:6379/0 \
+  --from-literal=MODEL_REDIS_URL=redis://mlapi-queue-redis.mlapi-system.svc:6379/0 \
   --from-literal=QUEUE_ACL_SECRET="$(openssl rand -hex 24)"
 kubectl apply -f deploy/k8s/40-supervisor.yaml -f deploy/k8s/50-router.yaml
 kubectl -n mlapi-system port-forward svc/mlapi-supervisor 8001:8000     # reach the admin API
@@ -108,7 +109,8 @@ their own usage (`gpu_memory_fraction` in `fastmlapi`). A model that needs a GPU
 |---|---|
 | Rotate an admin key | Generate a new hash, add it to `ADMIN_API_KEYS` (comma-separated), restart the Supervisor, remove the old hash later |
 | Back up | The SQLite file lives in the `supervisor_data` volume (`/data/supervisor.db`); with Postgres use `pg_dump`. Redis needs no backup |
-| Redis was restarted or wiped | Nothing to do: the Supervisor republishes routes, schemas and keys within a minute. Queued jobs are lost by design (persistence is off) |
+| Redis was restarted or wiped | Nothing to do: the Supervisor republishes routes, schemas and keys within a minute, and recreates the queue-mode models' Redis users. Queued jobs are lost by design (persistence is off) |
+| Queue-mode models stop responding | Their queue lives on a separate Redis (`queue-redis` / `mlapi-queue-redis`) because model code can run Lua scripts that hang a Redis server. Restart that Redis; routes, keys and sync models are unaffected |
 | A deploy failed | `GET /v1/models/{name}` shows the reason in `deployments`. Fix the image, push a new `latest`, or `POST …/redeploy` |
 | Roll back | `POST /v1/models/{name}/rollback` |
 | Model stuck in `waiting_for_gpu` | Another model holds all GPU slices. Put it to sleep (`/sleep`) or remove it |

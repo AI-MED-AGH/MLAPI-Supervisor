@@ -43,3 +43,9 @@ def test_reads_environment(monkeypatch):
     s = Settings(_env_file=None)
     assert s.redis_url == "redis://:pw@r:6379/2"
     assert s.cluster_backend == "kubernetes"
+
+
+def test_queue_redis_settings_default_to_the_shared_redis():
+    s = make()
+    assert s.queue_redis_url is None and s.worker_heartbeat_grace == 10.0
+    assert s.redis_selector == "app=mlapi-queue-redis"
