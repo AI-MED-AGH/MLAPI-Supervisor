@@ -177,3 +177,41 @@ async def test_deploying_model_rejects_conflicting_operations(api):
     for method, path in [("post", "/v1/models/ecg/redeploy"), ("post", "/v1/models/ecg/sleep"), ("delete", "/v1/models/ecg")]:
         assert (await getattr(api, method)(path, headers=H)).status_code == 409
     await drain(api)
+
+
+async def test_approving_while_the_model_is_busy_is_refused_and_changes_nothing(api):
+    from app.registry.queries import get_model_by_name
+
+    await deployed(api)
+    await register(api, labels={**LABELS, "mlapi.cpu": "4"}, digest="sha256:bbb")      # waits for approval
+    async with api.app.state.sessionmaker() as s:
+        model = await get_model_by_name(s, "ecg")
+        model.state = "deploying"                                                      # a deploy is in flight
+        await s.commit()
+    pending = (await api.get("/v1/approvals", headers=H)).json()[0]
+    r = await api.post(f"/v1/approvals/{pending['id']}/approve", headers=H)
+    assert r.status_code == 409
+    still = (await api.get("/v1/approvals", headers=H)).json()
+    assert [a["status"] for a in still] == ["pending"]                                 # the request is still waiting
+    assert (await api.get("/v1/models/ecg", headers=H)).json()["approved_resources"]["cpu_m"] == 1000
+    async with api.app.state.sessionmaker() as s:
+        model = await get_model_by_name(s, "ecg")
+        model.state = "ready"
+        await s.commit()
+    assert (await api.post(f"/v1/approvals/{pending['id']}/approve", headers=H)).status_code == 200
+    await drain(api)
+    assert (await api.get("/v1/models/ecg", headers=H)).json()["current_digest"] == "sha256:bbb"
+
+
+async def test_queue_model_detail_reports_the_worker_state(api):
+    from tests.support import FakeQueueAccess
+
+    api.app.state.queue_access = FakeQueueAccess()
+    await register(api, labels={**LABELS, "mlapi.mode": "queue"}, image="ecg-queue:1")
+    await approve_first(api)
+    detail = (await api.get("/v1/models/ecg", headers=H)).json()
+    assert detail["mode"] == "queue" and detail["worker_state"] == "stopped"
+    await api.backend.scale("ecg", 1, role="worker")
+    assert (await api.get("/v1/models/ecg", headers=H)).json()["worker_state"] == "running"
+    sync = (await api.get("/v1/models", headers=H)).json()
+    assert sync[0]["mode"] == "queue"

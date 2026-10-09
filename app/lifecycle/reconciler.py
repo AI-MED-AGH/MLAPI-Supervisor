@@ -1,5 +1,6 @@
 import logging
 
+from app.redis_sync.keys import rebuild_keys
 from app.redis_sync.routes import delete_route, delete_schema, publish_route, publish_schema
 from app.registry import states
 from app.registry.errors import Conflict
@@ -29,27 +30,40 @@ class Reconciler:
         self._probe = probe
         self._queue_access = queue_access
 
+    async def _active_names(self) -> set[str]:
+        """Names of models that must keep their workload and route. Always read fresh: models appear mid-pass."""
+        async with self._sm() as session:
+            return {m.name for m in await list_models(session) if m.state != states.REMOVED}
+
     async def tick(self) -> None:
+        try:  # Redis may have restarted since the last pass, taking every API key with it
+            async with self._sm() as session:
+                await rebuild_keys(self._redis, session)
+        except Exception:
+            logger.exception("Could not republish API keys")
+
         async with self._sm() as session:
             models = list(await list_models(session))
-        active = {m.name for m in models if m.state != states.REMOVED}
-
         for model in models:
             try:
                 await self._reconcile_model(model)
             except Exception:
                 logger.exception("Reconciling %s failed", model.name)
 
-        for name in await self._backend.list_models():
+        # Orphan sweeps come last, and the set of live models is re-read right before each one: a model approved and
+        # deployed since this pass began has a workload and a route that must not be mistaken for leftovers.
+        workloads = await self._backend.list_models()
+        active = await self._active_names()
+        for name in workloads:
             if name not in active:
                 logger.warning("Removing orphaned workload %s", name)
                 await self._backend.delete_model(name, keep_cache=True)
-        async for key in self._redis.scan_iter(match="route:*"):
-            if key.removeprefix("route:") not in active:
-                await self._redis.delete(key)
-        async for key in self._redis.scan_iter(match="schema:*"):
-            if key.removeprefix("schema:") not in active:
-                await self._redis.delete(key)
+        for prefix in ("route:", "schema:"):
+            keys = [key async for key in self._redis.scan_iter(match=f"{prefix}*")]
+            active = await self._active_names()
+            for key in keys:
+                if key.removeprefix(prefix) not in active:
+                    await self._redis.delete(key)
 
     async def _reconcile_model(self, model) -> None:
         if model.state == states.REMOVED:

@@ -328,3 +328,38 @@ async def test_queue_data_lives_in_the_queue_redis_not_the_control_redis(env):
     assert (await get(env)).state == states.READY
     assert await env.redis.keys("fastmlapi:*") == []                 # nothing queue-related in the control Redis
     await queue_redis.aclose()
+
+
+# ───────────── review findings: reconciler ─────────────
+async def test_reconciler_republishes_api_keys_after_a_redis_restart(env):
+    from app.keys.queries import create_key, revoke_key
+
+    async with env.sm() as s:
+        live, _ = await create_key(s, name="live", allowed_models=["ecg"], allow_all=False, expires_at=None)
+        dead, _ = await create_key(s, name="dead", allowed_models=["ecg"], allow_all=False, expires_at=None)
+        await revoke_key(s, dead)
+        await s.commit()
+    await reconciler(env).tick()
+    assert await env.redis.exists(f"key:{live.id}") == 1 and await env.redis.exists(f"key:{dead.id}") == 0
+    await env.redis.flushall()                                    # Redis restarted with persistence off
+    await reconciler(env).tick()
+    assert await env.redis.exists(f"key:{live.id}") == 1 and await env.redis.exists(f"key:{dead.id}") == 0
+
+
+async def test_reconciler_does_not_delete_a_workload_whose_model_was_created_during_the_tick(env, monkeypatch):
+    from app.cluster.backend import ModelSpec
+    from tests.support import RES, make_model
+
+    await _ready_model(env)
+    original = env.backend.list_models
+
+    async def racing():
+        # a second model is approved and its first deploy applies a workload AFTER the reconciler started its pass
+        await make_model(env, name="newbie")
+        await env.backend.apply_model(ModelSpec(name="newbie", image="x@sha256:1", mode="sync", resources=RES))
+        await env.redis.set("route:newbie", json.dumps({"url": "http://x", "state": "starting", "mode": "sync"}))
+        return await original()
+
+    monkeypatch.setattr(env.backend, "list_models", racing)
+    await reconciler(env).tick()
+    assert "newbie" in env.backend.models and await env.redis.exists("route:newbie") == 1

@@ -9,6 +9,7 @@ from app.auth import require_admin
 from app.db import get_session
 from app.deps import get_redis
 from app.registry import states
+from app.deployer.service import BUSY_STATES
 from app.registry.errors import Conflict, NotFound
 from app.registry.labels import LabelError, NotAModel, parse_labels
 from app.registry.queries import (
@@ -117,6 +118,8 @@ async def get_model_detail(
     out["schema"] = json.loads(raw_schema) if raw_schema else None
     try:
         runtime = await svc.backend.status(name)
+        if model.mode == "queue":
+            out["worker_state"] = "running" if runtime.worker_replicas else "stopped"
         out["runtime"] = {
             "exists": runtime.exists, "ready": runtime.ready, "replicas": runtime.replicas,
             "worker_replicas": runtime.worker_replicas, "pending_reason": runtime.pending_reason,
@@ -235,13 +238,18 @@ async def approve(
     session: AsyncSession = Depends(get_session),
     svc: Services = Depends(get_services),
 ):
+    from app.registry.queries import get_model
+
+    request = await get_request(session, request_id)
+    if request is None:
+        raise NotFound(f"request {request_id} not found")
+    target = await get_model(session, request.model_id)
+    if target.state in BUSY_STATES:  # refuse BEFORE touching anything: an approval that cannot start would strand the digest
+        raise Conflict(f"model {target.name!r} is busy ({target.state}); approve again when it is idle")
     override = None
     body = body or ApproveBody()
     if any(v is not None for v in (body.cpu, body.memory, body.gpu, body.disk)):
-        req = await get_request(session, request_id)
-        if req is None:
-            raise NotFound(f"request {request_id} not found")
-        asked = Resources.from_dict(req.requested)
+        asked = Resources.from_dict(request.requested)
         try:
             override = Resources(
                 cpu_m=parse_cpu(body.cpu) if body.cpu is not None else asked.cpu_m,
@@ -252,16 +260,10 @@ async def approve(
         except ResourceError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
     model, digest = await svc.registry.approve(session, request_id, override=override)
-    started = True
-    reason = None
-    try:
-        await svc.deployer.begin(session, model, digest)
-    except Conflict as exc:
-        started, reason = False, str(exc)
+    await svc.deployer.begin(session, model, digest)
     await session.commit()
-    if started:
-        svc.deployer.spawn(model.id, digest)
-    return {"deploy_started": started, "reason": reason, "model": model_out(model)}
+    svc.deployer.spawn(model.id, digest)
+    return {"deploy_started": True, "reason": None, "model": model_out(model)}
 
 
 @approvals_router.post("/{request_id}/reject")
