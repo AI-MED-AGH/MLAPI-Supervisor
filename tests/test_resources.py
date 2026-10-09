@@ -65,3 +65,21 @@ def test_dict_roundtrip():
 def test_from_dict_rejects_garbage():
     with pytest.raises(ResourceError):
         Resources.from_dict({"cpu_m": "x"})
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["1\n", "2\n", "٢", "１", "9" * 400, "1" + "0" * 400, "1.5.2", "1" * 40],
+)
+def test_parse_cpu_rejects_newlines_unicode_digits_and_overflow(raw):
+    with pytest.raises(ResourceError):
+        parse_cpu(raw)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["4Gi\n", "٤Gi", "9" * 400 + "Gi", "1" + "0" * 400, "1" * 40 + "Gi"],
+)
+def test_parse_quantity_rejects_newlines_unicode_digits_and_overflow(raw):
+    with pytest.raises(ResourceError):
+        parse_quantity(raw)

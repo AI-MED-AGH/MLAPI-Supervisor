@@ -4,8 +4,8 @@ from dataclasses import dataclass
 MAX_CPU_M = 256_000
 MAX_BYTES = 4 * 1024**4  # 4 Ti
 
-_CPU_RE = re.compile(r"^(\d+(?:\.\d+)?)(m?)$")
-_QTY_RE = re.compile(r"^(\d+(?:\.\d+)?)(Ki|Mi|Gi|Ti)?$")
+_CPU_RE = re.compile(r"([0-9]{1,9}(?:\.[0-9]{1,9})?)(m?)")
+_QTY_RE = re.compile(r"([0-9]{1,15}(?:\.[0-9]{1,9})?)(Ki|Mi|Gi|Ti)?")
 _UNITS = {None: 1, "Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4}
 
 
@@ -15,7 +15,7 @@ class ResourceError(ValueError):
 
 def parse_cpu(raw: str) -> int:
     """Returns millicores. Accepts '2', '0.5', '500m'."""
-    match = _CPU_RE.match(raw or "")
+    match = _CPU_RE.fullmatch(raw or "")
     if not match:
         raise ResourceError(f"invalid cpu quantity: {raw!r}")
     number, milli = float(match.group(1)), match.group(2) == "m"
@@ -27,7 +27,7 @@ def parse_cpu(raw: str) -> int:
 
 def parse_quantity(raw: str) -> int:
     """Returns bytes. Accepts plain bytes or Ki/Mi/Gi/Ti suffixes (decimals allowed)."""
-    match = _QTY_RE.match(raw or "")
+    match = _QTY_RE.fullmatch(raw or "")
     if not match:
         raise ResourceError(f"invalid quantity: {raw!r}")
     value = int(round(float(match.group(1)) * _UNITS[match.group(2)]))

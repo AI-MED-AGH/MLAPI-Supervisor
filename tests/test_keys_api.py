@@ -53,6 +53,8 @@ async def test_list_and_get_never_expose_secrets(api):
         {"name": "x", "allowed_models": ["UPPER"]},
         {"name": "x", "allowed_models": ["a b"]},
         {"name": "x", "allowed_models": ["../etc"]},
+        {"name": "x", "allowed_models": ["m1\n"]},
+        {"name": "x", "allowed_models": ["ecg-*\n"]},
         {"name": "", "allowed_models": ["m1"]},
         {"name": "x", "allowed_models": ["m1"], "expires_at": 1},         # in the past
         {"name": "x", "allowed_models": ["m1"], "allow_all": True},       # ambiguous

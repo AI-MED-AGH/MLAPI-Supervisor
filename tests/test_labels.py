@@ -53,3 +53,19 @@ def test_invalid_labels(overrides):
 def test_invalid_package_name_without_name_label():
     with pytest.raises(LabelError):
         parse_labels({"mlapi.model": "true"}, "Bad Package")
+
+
+@pytest.mark.parametrize("name", ["ok\n", "ok\n\n", "ok\r", "ok ", " ok", "ök", "ａｂｃ"])
+def test_model_name_must_match_exactly(name):
+    with pytest.raises(LabelError):
+        parse_labels({"mlapi.model": "true", "mlapi.model.name": name}, "pkg")
+
+
+def test_gpu_label_must_match_exactly():
+    with pytest.raises(LabelError):
+        parse_labels({"mlapi.model": "true", "mlapi.gpu": "true\n"}, "pkg")
+
+
+def test_mode_label_must_match_exactly():
+    with pytest.raises(LabelError):
+        parse_labels({"mlapi.model": "true", "mlapi.mode": "queue\n"}, "pkg")

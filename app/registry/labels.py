@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 from app.registry.resources import ResourceError, Resources, parse_cpu, parse_quantity
 
-NAME_RE = re.compile(r"^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$")
+NAME_RE = re.compile(r"[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?")
 
 DEFAULT_CPU = "1"
 DEFAULT_MEMORY = "2Gi"
@@ -31,7 +31,7 @@ def parse_labels(labels: dict[str, str] | None, package_name: str) -> ModelLabel
         raise NotAModel()
 
     name = labels.get("mlapi.model.name") or package_name.rsplit("/", 1)[-1]
-    if not NAME_RE.match(name):
+    if not NAME_RE.fullmatch(name):
         raise LabelError(f"invalid model name: {name!r}")
 
     mode = labels.get("mlapi.mode", "sync")

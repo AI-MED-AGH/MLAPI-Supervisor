@@ -15,12 +15,12 @@ from app.redis_sync.keys import publish_key, unpublish_key
 
 router = APIRouter(prefix="/v1/keys", tags=["keys"], dependencies=[Depends(require_admin)])
 
-_PATTERN_RE = re.compile(r"^[a-z0-9][-a-z0-9]{0,38}\*?$")
+_PATTERN_RE = re.compile(r"[a-z0-9][-a-z0-9]{0,38}\*?")
 
 
 def _check_patterns(models: list[str]) -> list[str]:
     for pattern in models:
-        if not _PATTERN_RE.match(pattern):
+        if not _PATTERN_RE.fullmatch(pattern):
             raise ValueError(f"invalid model pattern: {pattern!r}")
     return models
 
