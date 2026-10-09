@@ -10,6 +10,18 @@ DEFAULT_MEMORY = "2Gi"
 DEFAULT_DISK = "5Gi"
 
 
+# Workloads are named m-<name>, m-<name>-api, m-<name>-worker and m-<name>-cache (mlapi-m-... on Docker). A model whose own name
+# ends like that would collide with, and overwrite, another model's workload.
+RESERVED_SUFFIXES = ("-api", "-worker", "-cache")
+
+
+def check_model_name(name: str) -> None:
+    if not NAME_RE.fullmatch(name):
+        raise LabelError(f"invalid model name: {name!r}")
+    if name.endswith(RESERVED_SUFFIXES):
+        raise LabelError(f"model name {name!r} ends with a reserved suffix {RESERVED_SUFFIXES}")
+
+
 class NotAModel(Exception):
     """The image does not carry mlapi.model=true."""
 
@@ -31,8 +43,7 @@ def parse_labels(labels: dict[str, str] | None, package_name: str) -> ModelLabel
         raise NotAModel()
 
     name = labels.get("mlapi.model.name") or package_name.rsplit("/", 1)[-1]
-    if not NAME_RE.fullmatch(name):
-        raise LabelError(f"invalid model name: {name!r}")
+    check_model_name(name)
 
     mode = labels.get("mlapi.mode", "sync")
     if mode not in ("sync", "queue"):

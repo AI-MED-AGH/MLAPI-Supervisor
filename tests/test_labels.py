@@ -69,3 +69,16 @@ def test_gpu_label_must_match_exactly():
 def test_mode_label_must_match_exactly():
     with pytest.raises(LabelError):
         parse_labels({"mlapi.model": "true", "mlapi.mode": "queue\n"}, "pkg")
+
+
+# ───────────── workload names must never collide ─────────────
+@pytest.mark.parametrize("name", ["ecg-api", "ecg-worker", "ecg-cache", "x-api", "a-b-worker"])
+def test_names_that_look_like_another_models_workloads_are_refused(name):
+    """A queue model `ecg` owns m-ecg-api and m-ecg-worker (and mlapi-m-ecg-api ...). A model called `ecg-api` would collide."""
+    with pytest.raises(LabelError, match="reserved"):
+        parse_labels({"mlapi.model": "true", "mlapi.model.name": name}, "pkg")
+
+
+@pytest.mark.parametrize("name", ["api", "worker", "cache", "apiary", "workers", "my-api-model", "ecg-apis"])
+def test_names_that_merely_contain_those_words_are_fine(name):
+    assert parse_labels({"mlapi.model": "true", "mlapi.model.name": name}, "pkg").name == name

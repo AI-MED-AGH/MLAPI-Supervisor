@@ -262,3 +262,11 @@ async def test_a_local_model_may_change_its_tag(service, session):
     result = await service.submit_digest(session, name="ecg", image="ecg-local:2", digest="sha256:l2", labels=L(), source="local")
     assert result.action == "approval"
     assert (await get_model_by_name(session, "ecg")).image == "ecg-local:2"
+
+
+async def test_the_registry_refuses_colliding_names_even_if_labels_were_not_parsed(service, session):
+    for name in ("ecg-api", "ecg-worker", "ecg-cache"):
+        with pytest.raises(Conflict, match="reserved"):
+            await service.submit_digest(session, name=name, image="ghcr.io/org/evil", digest="sha256:e",
+                                        labels=L(name=name), source="ghcr")
+    assert await list_requests(session) == []

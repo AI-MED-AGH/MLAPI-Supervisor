@@ -52,17 +52,24 @@ class GhcrClient:
 
     async def _request(self, method: str, url: str, headers: dict, **kwargs) -> httpx.Response:
         try:
-            response = await self._http.request(method, url, headers=headers, **kwargs)
+            # stream, so the size limit applies while reading instead of after the whole body is in memory
+            async with self._http.stream(method, url, headers=headers, **kwargs) as response:
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body += chunk
+                    if len(body) > _MAX_BODY:
+                        raise GhcrError("response too large")
+                result = httpx.Response(
+                    response.status_code, headers=response.headers, content=bytes(body), request=response.request
+                )
         except httpx.HTTPError as exc:
             raise GhcrError(f"request failed: {type(exc).__name__}") from exc
-        if response.status_code == 429 or (
-            response.status_code == 403
-            and ("retry-after" in response.headers or response.headers.get("x-ratelimit-remaining") == "0")
+        if result.status_code == 429 or (
+            result.status_code == 403
+            and ("retry-after" in result.headers or result.headers.get("x-ratelimit-remaining") == "0")
         ):
             raise RateLimited("rate limited")
-        if len(response.content) > _MAX_BODY:
-            raise GhcrError("response too large")
-        return response
+        return result
 
     async def list_packages(self) -> list[str]:
         names: list[str] = []

@@ -9,7 +9,6 @@ import pytest
 import pytest_asyncio
 from fakeredis import FakeAsyncRedis
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
 
 from app.config import Settings
 
@@ -38,17 +37,15 @@ async def redis():
 
 
 @pytest_asyncio.fixture
-async def db_engine():
+async def db_engine(tmp_path):
+    """A real SQLite file with separate connections, like production. (A single shared connection lets concurrent tasks
+    interleave statements, which production never does.)"""
     from app.db import Base
     import app.keys.tables  # noqa: F401  (register tables)
     import app.registry.tables  # noqa: F401
     import app.watchman.tables  # noqa: F401
 
-    engine = create_async_engine(
-        "sqlite+aiosqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", connect_args={"timeout": 30})
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield engine

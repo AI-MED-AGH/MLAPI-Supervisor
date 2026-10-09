@@ -473,3 +473,60 @@ async def test_shutdown_cancels_running_deploys_without_errors(env):
     await asyncio.sleep(0.1)
     await asyncio.wait_for(env.deployer.shutdown(), 5)
     assert task.done()
+
+
+# ───────────── a crashing task must never strand a model ─────────────
+async def test_a_deploy_task_that_crashes_early_does_not_leave_the_model_deploying(env, monkeypatch):
+    import app.deployer.service as service_module
+
+    async def boom(*a, **k):
+        raise RuntimeError("database exploded")
+
+    mid = await make_model(env)
+    async with env.sm() as s:
+        await env.deployer.begin(s, await get_model(s, mid), "sha256:a")
+        await s.commit()
+    monkeypatch.setattr(service_module, "add_deployment", boom)       # the first thing run() does
+    env.deployer.spawn(mid, "sha256:a")
+    await env.deployer.drain()
+    model = await get(env)
+    assert model.state == states.FAILED and "internal error" in model.state_detail
+
+
+async def test_a_crashing_upgrade_returns_a_serving_model_to_ready(env, monkeypatch):
+    import app.deployer.service as service_module
+
+    mid = await _ready_model(env)
+
+    async def boom(*a, **k):
+        raise RuntimeError("database exploded")
+
+    async with env.sm() as s:
+        await env.deployer.begin(s, await get_model(s, mid), "sha256:b")
+        await s.commit()
+    monkeypatch.setattr(service_module, "add_deployment", boom)
+    env.deployer.spawn(mid, "sha256:b")
+    await env.deployer.drain()
+    model = await get(env)
+    assert model.state == states.READY and model.current_digest == "sha256:a"
+
+
+async def test_a_wake_task_that_crashes_early_does_not_leave_the_model_starting(env, monkeypatch):
+    import app.deployer.service as service_module
+
+    mid = await _ready_model(env)
+    async with env.sm() as s:
+        await env.deployer.sleep(s, await get_model_by_name(s, "ecg"))
+        await s.commit()
+    async with env.sm() as s:
+        await env.deployer.begin_wake(s, await get_model_by_name(s, "ecg"))
+        await s.commit()
+
+    async def boom(*a, **k):
+        raise RuntimeError("database exploded")
+
+    monkeypatch.setattr(service_module, "get_model", boom)
+    env.deployer.spawn_wake(mid)
+    await env.deployer.drain()
+    monkeypatch.undo()
+    assert (await get(env)).state in (states.FAILED, states.SLEEPING, states.READY)

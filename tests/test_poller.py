@@ -193,3 +193,23 @@ async def test_mode_change_is_reported_not_applied(env, ghcr):
 async def test_list_failure_is_swallowed(env, ghcr):
     ghcr.fail["/orgs/"] = 500
     await make_poller(env, ghcr).tick()
+
+
+async def test_an_oversized_registry_response_is_cut_off_while_streaming(ghcr):
+    """The size limit must apply while reading, not after the whole body is already in memory."""
+    import httpx
+
+    consumed = []
+
+    async def chunks():
+        for i in range(10_000):
+            consumed.append(i)
+            yield b"x" * 100_000                      # 1 GB if read to the end
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=chunks())
+
+    client = GhcrClient(token="t", org="org", http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(GhcrError, match="too large"):
+        await client.list_packages()
+    assert len(consumed) < 100                         # stopped after a few MB, nowhere near the end

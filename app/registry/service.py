@@ -9,7 +9,7 @@ from app.events import EventBus
 from app.registry import states
 from app.registry.approval import Decision, decide
 from app.registry.errors import Conflict, Invalid, NotFound
-from app.registry.labels import ModelLabels
+from app.registry.labels import LabelError, ModelLabels, check_model_name
 from app.registry.queries import get_model, get_model_by_name, get_request
 from app.registry.resources import Resources
 from app.registry.tables import Model, ResourceRequest
@@ -44,6 +44,10 @@ class RegistryService:
         labels: ModelLabels,
         source: str,
     ) -> Submission:
+        try:
+            check_model_name(name)
+        except LabelError as exc:
+            raise Conflict(str(exc)) from exc
         model = await get_model_by_name(session, name)
         now = int(time.time())
 

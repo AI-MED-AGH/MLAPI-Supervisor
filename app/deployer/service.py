@@ -99,8 +99,29 @@ class Deployer:
         if self._events is not None:
             self._events.emit(event, name, digest=digest, status=status, **details)
 
-    def _spawn(self, coro) -> asyncio.Task:
-        task = asyncio.get_running_loop().create_task(coro)
+    async def _guarded(self, model_id: int, coro) -> None:
+        """Runs a background deploy/wake. If it crashes before its own error handling, the model must not stay busy."""
+        try:
+            await coro
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Background task for model %s crashed", model_id)
+            try:
+                async with self._sm() as session:
+                    model = await session.get(Model, model_id)
+                    if model is not None and model.state in BUSY_STATES:
+                        if model.current_digest:
+                            model.state = states.READY if model.mode == "sync" else states.SLEEPING
+                            model.state_detail = f"internal error: {exc}"
+                        else:
+                            model.state, model.state_detail = states.FAILED, f"internal error: {exc}"
+                        await session.commit()
+            except Exception:
+                logger.exception("Could not repair model %s after a crash", model_id)
+
+    def _spawn(self, coro, model_id: int | None = None) -> asyncio.Task:
+        task = asyncio.get_running_loop().create_task(self._guarded(model_id, coro) if model_id is not None else coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
@@ -188,7 +209,7 @@ class Deployer:
             raise Conflict(f"model {model.name!r} is busy ({model.state})")
 
     def spawn(self, model_id: int, digest: str) -> asyncio.Task:
-        return self._spawn(self.run(model_id, digest))
+        return self._spawn(self.run(model_id, digest), model_id)
 
     async def run(self, model_id: int, digest: str) -> None:
         async with self._lock(model_id):
@@ -443,7 +464,7 @@ class Deployer:
             raise Conflict(f"model {model.name!r} is {model.state}; only sleeping models can wake")
 
     def spawn_wake(self, model_id: int) -> asyncio.Task:
-        return self._spawn(self.run_wake(model_id))
+        return self._spawn(self.run_wake(model_id), model_id)
 
     async def run_wake(self, model_id: int) -> None:
         async with self._lock(model_id):
