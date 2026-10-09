@@ -218,6 +218,7 @@ async def test_queue_mode_sleep_only_scales_worker_and_keeps_route_ready(env):
     async with env.sm() as s:
         model = await get_model_by_name(s, "ecg")
         model.state = states.READY
+        await s.flush()                               # transitions are decided by the database, not the in-memory copy
         await env.deployer.sleep(s, model)
         await s.commit()
     assert ("scale", "ecg", 0, "worker") in env.backend.calls
@@ -258,6 +259,7 @@ async def test_redeploy_and_rollback_selection(env):
         assert await env.deployer.rollback(s, model) == "sha256:a"
         model.state = states.READY
         model.failed_digest = "sha256:x"
+        await s.flush()
         assert await env.deployer.redeploy(s, model) == "sha256:b"
         assert model.failed_digest is None
 
@@ -403,4 +405,44 @@ async def test_slow_state_updates_while_waiting_for_a_gpu_never_time_the_deploy_
     assert (await get(env)).state == states.WAITING_FOR_GPU
     env.backend.gpu_slots = 1
     await asyncio.wait_for(task, 10)
+    assert (await get(env)).state == states.READY
+
+
+# ───────────── atomic transitions: two requests must not both win ─────────────
+async def test_begin_is_atomic_against_a_stale_copy_of_the_model(env):
+    mid = await make_model(env)
+    async with env.sm() as a, env.sm() as b:
+        stale = await get_model(a, mid)                  # this copy still says "pending approval"
+        fresh = await get_model(b, mid)
+        await env.deployer.begin(b, fresh, "sha256:a")
+        await b.commit()
+        with pytest.raises(Conflict):
+            await env.deployer.begin(a, stale, "sha256:a")   # the database already says "deploying"
+
+
+async def test_sleep_is_atomic_against_a_stale_copy_of_the_model(env):
+    mid = await _ready_model(env)
+    async with env.sm() as a, env.sm() as b:
+        stale = await get_model(a, mid)
+        fresh = await get_model(b, mid)
+        await env.deployer.sleep(b, fresh)
+        await b.commit()
+        with pytest.raises(Conflict):
+            await env.deployer.sleep(a, stale)
+    scale_calls = [c for c in env.backend.calls if c[0] == "scale"]
+    assert len(scale_calls) == 1                         # the losing request never touched the cluster
+
+
+async def test_a_failed_scale_down_leaves_the_model_ready(env):
+    mid = await _ready_model(env)
+
+    async def boom(*a, **k):
+        raise BackendError("docker down")
+
+    env.backend.scale = boom
+    async with env.sm() as s:
+        model = await get_model(s, mid)
+        with pytest.raises(BackendError):
+            await env.deployer.sleep(s, model)
+        await s.commit()
     assert (await get(env)).state == states.READY

@@ -145,6 +145,24 @@ class Deployer:
             ),
         )
 
+    @staticmethod
+    async def _transition(session, model: Model, allowed_from: tuple[str, ...], to_state: str, detail=None) -> bool:
+        """Moves the model to `to_state` only if the DATABASE still says it is in one of `allowed_from`.
+
+        The in-memory copy a request holds may be stale: two requests can both read "ready". A conditional UPDATE decides
+        the winner atomically, and the loser gets False."""
+        from sqlalchemy import update
+
+        result = await session.execute(
+            update(Model).where(Model.id == model.id, Model.state.in_(allowed_from))
+            .values(state=to_state, state_detail=detail)
+        )
+        if result.rowcount != 1:
+            await session.refresh(model)
+            return False
+        model.state, model.state_detail = to_state, detail
+        return True
+
     # ───────────── deploy ─────────────
     async def begin(self, session, model: Model, digest: str) -> None:
         """Marks the model as deploying. Raises Conflict when the transition is not allowed."""
@@ -154,8 +172,9 @@ class Deployer:
             raise Conflict(f"model {model.name!r} was removed")
         if not model.approved_resources:
             raise Conflict(f"resources for model {model.name!r} are not approved yet")
-        model.state, model.state_detail = states.DEPLOYING, None
-        await session.flush()
+        startable = tuple(st for st in states.ALL_STATES if st not in BUSY_STATES and st != states.REMOVED)
+        if not await self._transition(session, model, startable, states.DEPLOYING):
+            raise Conflict(f"model {model.name!r} is busy ({model.state})")
 
     def spawn(self, model_id: int, digest: str) -> asyncio.Task:
         return self._spawn(self.run(model_id, digest))
@@ -392,10 +411,15 @@ class Deployer:
     async def sleep(self, session, model: Model) -> None:
         if model.state != states.READY:
             raise Conflict(f"model {model.name!r} is {model.state}; only ready models can sleep")
+        # claim the transition first so a concurrent redeploy/sleep cannot also act on this model
+        if not await self._transition(session, model, (states.READY,), states.SLEEPING):
+            raise Conflict(f"model {model.name!r} is {model.state}; only ready models can sleep")
         role = "worker" if model.mode == "queue" else "main"
-        await self._backend.scale(model.name, 0, role=role)
-        model.state = states.SLEEPING
-        await session.flush()
+        try:
+            await self._backend.scale(model.name, 0, role=role)
+        except Exception:
+            await self._transition(session, model, (states.SLEEPING,), states.READY)
+            raise
         if model.mode == "sync":
             await self._set_route(model.name, states.SLEEPING, model.mode)
         self._emit("model.sleeping", model.name, model.current_digest, states.SLEEPING)
@@ -403,8 +427,8 @@ class Deployer:
     async def begin_wake(self, session, model: Model) -> None:
         if model.state != states.SLEEPING:
             raise Conflict(f"model {model.name!r} is {model.state}; only sleeping models can wake")
-        model.state = states.STARTING
-        await session.flush()
+        if not await self._transition(session, model, (states.SLEEPING,), states.STARTING):
+            raise Conflict(f"model {model.name!r} is {model.state}; only sleeping models can wake")
 
     def spawn_wake(self, model_id: int) -> asyncio.Task:
         return self._spawn(self.run_wake(model_id))
