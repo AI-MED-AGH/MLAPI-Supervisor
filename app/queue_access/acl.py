@@ -9,32 +9,36 @@ logger = logging.getLogger(__name__)
 
 _NAME_RE = re.compile(r"[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?")
 
-# Everything fastmlapi's queue needs (lists, hashes, key expiry) and nothing that touches other keys or the server.
-# Do NOT grant whole categories such as @keyspace or @dangerous: @keyspace contains FLUSHALL, FLUSHDB and SWAPDB,
-# which take no key argument and so escape the `~fastmlapi:<name>:*` restriction. If a new fastmlapi release needs
-# more commands, add them here one by one.
-DATA_CATEGORIES = ["+@list", "+@hash", "+@string", "+@set", "+@sortedset"]
-KEY_COMMANDS = [
+# STRICT (default): exactly the commands the current fastmlapi Redis backend issues
+# (fastmlapi.queue.redis_backend.REDIS_COMMANDS_USED), and nothing else, not even harmless-looking ones. Whole command
+# categories are never granted: they hide expensive or destructive commands (@keyspace has FLUSHALL, @string has LCS and
+# SETRANGE, @set has SUNIONSTORE), and key patterns do not restrict commands that take no key. No Lua scripts and no SCAN
+# means a model cannot hang the server with a script or list the names of other tenants' keys. Requires Redis >= 7 (checked
+# at provision time, fail closed). If a new fastmlapi release needs another command, add it here one by one.
+LIBRARY_COMMANDS = [
+    "+lmove", "+lpush", "+rpush", "+lrem", "+lrange", "+llen", "+lpos",
+    "+hset", "+hsetnx", "+hget", "+hmget", "+hgetall", "+hdel", "+hincrby",
+    "+expire", "+sadd", "+srem", "+smembers", "+del", "+exists",
+    "+watch", "+unwatch", "+multi", "+exec", "+discard", "+time", "+ping",
+]
+CONNECTION_COMMANDS = ["+hello", "+auth", "+client|setname", "+client|setinfo", "+client|id"]
+MODEL_COMMANDS = ["-@all", *LIBRARY_COMMANDS, *CONNECTION_COMMANDS]
+
+# LEGACY (QUEUE_LEGACY_ACL=true): OLDER fastmlapi versions used Lua scripts (register_script = EVALSHA + SCRIPT LOAD), SCAN and
+# other string/sorted-set commands. Found by running the real library against Redis 7.4. Redis enforces the key prefix and the
+# command list inside scripts, but SCAN is not filtered by key permissions and a script can hang the server, so the categories
+# below are the price of running such a library. EVAL and SCRIPT FLUSH/KILL stay denied either way.
+LEGACY_CATEGORIES = ["+@list", "+@hash", "+@string", "+@set", "+@sortedset"]
+LEGACY_KEY_COMMANDS = [
     "+del", "+unlink", "+exists", "+expire", "+pexpire", "+expireat", "+pexpireat", "+persist", "+ttl", "+pttl", "+type",
 ]
-CONNECTION_COMMANDS = ["+ping", "+hello", "+auth", "+echo", "+client|setname", "+client|setinfo", "+client|id"]
-# What the CURRENT fastmlapi Redis backend needs (fastmlapi.queue.redis_backend.REDIS_COMMANDS_USED): lists, hashes, sets,
-# optimistic transactions (WATCH/MULTI/EXEC), LMOVE and TIME. No Lua scripts and no SCAN, so a model cannot hang the server
-# with a script, cannot list the names of other tenants' keys, and the key prefix below is enforced for every command it can
-# run. Requires Redis >= 7 (checked at provision time, fail closed).
-QUEUE_COMMANDS = ["+time", "+multi", "+exec", "+discard", "+watch", "+unwatch"]
-MODEL_COMMANDS = ["-@all", *DATA_CATEGORIES, *KEY_COMMANDS, *CONNECTION_COMMANDS, *QUEUE_COMMANDS]
-
-# OLDER fastmlapi versions used Lua scripts (register_script = EVALSHA + SCRIPT LOAD) and SCAN. Found by running the real
-# library against Redis 7.4. Redis enforces the key prefix and command list inside scripts, BUT SCAN is not filtered by key
-# permissions (a model can list the NAMES of every key in its Redis) and a script can hang the server for everyone. Hence
-# legacy mode refuses a Redis that is shared with routes and API keys. Opt in with QUEUE_LEGACY_ACL=true; EVAL and
-# SCRIPT FLUSH/KILL stay denied either way.
 LEGACY_COMMANDS = ["+evalsha", "+script|load", "+scan"]
 
 
 def commands_for(*, legacy: bool) -> list[str]:
-    return [*MODEL_COMMANDS, *LEGACY_COMMANDS] if legacy else list(MODEL_COMMANDS)
+    if not legacy:
+        return list(MODEL_COMMANDS)
+    return [*MODEL_COMMANDS, *LEGACY_CATEGORIES, *LEGACY_KEY_COMMANDS, "+echo", *LEGACY_COMMANDS]
 
 
 class QueueAccessError(Exception):
@@ -93,10 +97,10 @@ class QueueAccess:
             await self.verify_server()  # retried on every attempt: a Redis that was still starting recovers on its own
         if self._unsafe or not self._verified:
             raise QueueAccessError(self._unsafe or "could not verify the queue Redis version")
-        if self._legacy and not self._dedicated:
+        if not self._dedicated:
             raise QueueAccessError(
-                "legacy queue-mode models (QUEUE_LEGACY_ACL) need a dedicated queue Redis: set QUEUE_REDIS_URL (they must not "
-                "share the Redis that holds routes and API keys)"
+                "queue-mode models need a dedicated queue Redis: set QUEUE_REDIS_URL. Redis cannot cap memory per user, so they must "
+                "not share the Redis that holds routes and API keys"
             )
         password = self._password(name)
         try:

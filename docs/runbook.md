@@ -132,12 +132,16 @@ their own usage (`gpu_memory_fraction` in `fastmlapi`). A model that needs a GPU
 
 ## 6. Known limits (read before exposing this to people you don't trust)
 
-* **Queue-mode (long-running job) models run as a restricted Redis user** that can only touch its own keys
-  (`fastmlapi:<name>:*`), with no scripting, no `SCAN`/`KEYS`, no pub/sub and no server commands. This needs a fastmlapi that
-  uses no Lua and no `SCAN` (the current one). Models built with an *older* fastmlapi would be refused by Redis; set
-  `QUEUE_LEGACY_ACL=true` for them. Legacy mode grants scripting and `SCAN`, which lets a model list the *names* of every key
-  in its Redis and hang the server with a script, so it refuses to run unless the queue lives on a dedicated Redis
-  (`QUEUE_REDIS_URL`, shipped in Compose and the Kubernetes manifests). Moving everything to a current fastmlapi is the fix.
+* **Queue-mode (long-running job) models run as a restricted Redis user** that may only run the commands fastmlapi's queue uses
+  (lists, hashes, a set, `WATCH`/`MULTI`/`EXEC`, `LMOVE`, `TIME`), and only on its own keys (`fastmlapi:<name>:*`): no scripting,
+  no `SCAN`/`KEYS`, no pub/sub, no server commands, not even harmless-looking string or sorted-set commands. This needs a
+  fastmlapi that uses no Lua and no `SCAN` (the current one). Models built with an *older* fastmlapi would be refused by Redis;
+  set `QUEUE_LEGACY_ACL=true` for them, which grants scripting, `SCAN` and the data-structure command categories (a model can then
+  list the *names* of every key in its Redis and hang the server with a script).
+* **Queue-mode models always get their own Redis** (`QUEUE_REDIS_URL`; `queue-redis` in Compose, `mlapi-queue-redis` on
+  Kubernetes), never the one holding routes and API keys, whatever the mode: Redis cannot cap memory per user, so one model
+  filling its keys must only ever be able to exhaust the queue Redis (which has a memory cap and refuses writes when full). The
+  Supervisor will not create a model's Redis user without it.
 * **Docker installs:** model containers can reach each other, and the Supervisor holds the Docker socket (root on the host).
 * **GPU memory is shared**, not isolated.
 * **Disk limits are not enforced on Docker** (they are sized into the cache volume on Kubernetes).

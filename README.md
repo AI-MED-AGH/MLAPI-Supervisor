@@ -61,7 +61,7 @@ Environment variables (see `.env.example`). The ones that matter:
 | `CLUSTER_BACKEND` | `docker` (single device, default), `kubernetes`, or `fake` (tests) |
 | `DATABASE_URL` | Empty = SQLite file in `DATA_DIR`; set a Postgres URL (`postgresql+asyncpg://…`) for an external DB |
 | `QUEUE_ACL_SECRET` | Needed for queue-mode (long-running job) models: derives each model's Redis password |
-| `QUEUE_LEGACY_ACL` | `true` only for models built with an older fastmlapi (Lua scripts, `SCAN`): grants broader Redis permissions and requires a dedicated queue Redis |
+| `QUEUE_LEGACY_ACL` | `true` only for models built with an older fastmlapi (Lua scripts, `SCAN`): grants broader Redis permissions (scripting, `SCAN`) |
 | `GHCR_ORG`, `GHCR_TOKEN` | Optional: poll this organisation's container registry for model images |
 
 ## Development

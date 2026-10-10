@@ -135,3 +135,21 @@ async def test_legacy_scripts_still_obey_the_key_prefix_and_command_list(world):
                  "return redis.call('FLUSHALL')"):
         await denied(m.register_script(body)())
     assert await admin.llen("fastmlapi:other:pending") == 1 and await admin.exists("route:ecg") == 0
+
+
+# ───────────── strict: nothing expensive or off-library, even on the model's own keys ─────────────
+@pytest.mark.parametrize(
+    "command",
+    [("SET", "fastmlapi:ecg:s", "x"), ("GET", "fastmlapi:ecg:s"), ("APPEND", "fastmlapi:ecg:s", "x"),
+     ("SETRANGE", "fastmlapi:ecg:s", "100000000", "x"), ("LCS", "fastmlapi:ecg:a", "fastmlapi:ecg:b"),
+     ("SUNIONSTORE", "fastmlapi:ecg:dst", "fastmlapi:ecg:a", "fastmlapi:ecg:b"), ("SINTER", "fastmlapi:ecg:a", "fastmlapi:ecg:b"),
+     ("ZADD", "fastmlapi:ecg:z", "1", "a"), ("SORT", "fastmlapi:ecg:l"), ("PFADD", "fastmlapi:ecg:p", "a"),
+     ("LSET", "fastmlapi:ecg:l", "0", "x"), ("LINSERT", "fastmlapi:ecg:l", "BEFORE", "a", "b"), ("LTRIM", "fastmlapi:ecg:l", "0", "1"),
+     ("RPOP", "fastmlapi:ecg:l"), ("UNLINK", "fastmlapi:ecg:l"), ("PEXPIRE", "fastmlapi:ecg:l", "1000"),
+     ("HSCAN", "fastmlapi:ecg:h", "0"), ("SSCAN", "fastmlapi:ecg:s", "0"), ("OBJECT", "ENCODING", "fastmlapi:ecg:l")],
+)
+async def test_strict_users_can_only_run_the_commands_the_library_uses(world, command):
+    mode, _, _, m = world
+    if mode != "strict":
+        pytest.skip("legacy mode keeps the data-structure categories for older libraries")
+    await denied(m.execute_command(*command))
