@@ -110,7 +110,7 @@ their own usage (`gpu_memory_fraction` in `fastmlapi`). A model that needs a GPU
 | Rotate an admin key | Generate a new hash, add it to `ADMIN_API_KEYS` (comma-separated), restart the Supervisor, remove the old hash later |
 | Back up | The SQLite file lives in the `supervisor_data` volume (`/data/supervisor.db`); with Postgres use `pg_dump`. Redis needs no backup |
 | Redis was restarted or wiped | Nothing to do: the Supervisor republishes routes, schemas and keys within a minute, and recreates the queue-mode models' Redis users. Queued jobs are lost by design (persistence is off) |
-| Queue-mode models stop responding | Their queue lives on a separate Redis (`queue-redis` / `mlapi-queue-redis`) because model code can run Lua scripts that hang a Redis server. Restart that Redis; routes, keys and sync models are unaffected |
+| Queue-mode models stop responding | Their queues live on a separate Redis (`queue-redis` / `mlapi-queue-redis`), kept apart so that routes and API keys never depend on it. Restart that Redis; routes, keys and sync models are unaffected |
 | A deploy failed | `GET /v1/models/{name}` shows the reason in `deployments`. Fix the image, push a new `latest`, or `POST …/redeploy` |
 | Roll back | `POST /v1/models/{name}/rollback` |
 | Model stuck in `waiting_for_gpu` | Another model holds all GPU slices. Put it to sleep (`/sleep`) or remove it |
@@ -132,12 +132,14 @@ their own usage (`gpu_memory_fraction` in `fastmlapi`). A model that needs a GPU
 
 ## 6. Known limits (read before exposing this to people you don't trust)
 
-* **Queue-mode (long-running job) models share a Redis with each other, not with the platform.** A model can list the *names*
-  of the other queue models' keys and can hang that Redis with a script; it can never read other models' data or touch routes
-  and API keys, which live on the control Redis. The Supervisor will not start a queue-mode model unless `QUEUE_REDIS_URL`
-  points at that separate instance. If a queue model misbehaves, restart the queue Redis.
+* **Queue-mode (long-running job) models run as a restricted Redis user** that can only touch its own keys
+  (`fastmlapi:<name>:*`), with no scripting, no `SCAN`/`KEYS`, no pub/sub and no server commands. This needs a fastmlapi that
+  uses no Lua and no `SCAN` (the current one). Models built with an *older* fastmlapi would be refused by Redis; set
+  `QUEUE_LEGACY_ACL=true` for them. Legacy mode grants scripting and `SCAN`, which lets a model list the *names* of every key
+  in its Redis and hang the server with a script, so it refuses to run unless the queue lives on a dedicated Redis
+  (`QUEUE_REDIS_URL`, shipped in Compose and the Kubernetes manifests). Moving everything to a current fastmlapi is the fix.
 * **Docker installs:** model containers can reach each other, and the Supervisor holds the Docker socket (root on the host).
 * **GPU memory is shared**, not isolated.
 * **Disk limits are not enforced on Docker** (they are sized into the cache volume on Kubernetes).
-* `fastmlapi`'s queue mode currently relies on a grace period instead of worker heartbeats (a worker that never reports is
-  trusted after 10 s of running).
+* A worker that publishes no liveness record (older fastmlapi) is trusted after 10 s of its container running; current versions
+  report `model_loaded` and are only trusted once the model is loaded.

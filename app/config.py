@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     # Queue-mode models run untrusted code against Redis (Lua scripts can hang a Redis server), so their queues
     # belong on a separate instance. Unset = share redis_url (fine for development only).
     queue_redis_url: str | None = None
+    # Models built with an older fastmlapi (Lua scripts, SCAN) need broader Redis permissions and a dedicated queue Redis.
+    queue_legacy_acl: bool = False
     model_redis_url: str | None = None  # how model containers reach the queue Redis
     queue_wake_retry_after: float = 60  # after a failed worker start, wait this long before trying again
     worker_heartbeat_grace: float = 10.0  # wait this long for a worker heartbeat before trusting the container
