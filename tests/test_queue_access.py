@@ -25,9 +25,9 @@ class RecordingRedis:
         return b"OK"
 
 
-def make(redis=None, secret=SECRET, base="redis://redis.internal:6380/2", dedicated=True):
+def make(redis=None, secret=SECRET, base="redis://redis.internal:6380/2", dedicated=True, legacy=False):
     redis = redis or RecordingRedis()
-    return QueueAccess(redis, secret=secret, model_redis_url=base, dedicated=dedicated), redis
+    return QueueAccess(redis, secret=secret, model_redis_url=base, dedicated=dedicated, legacy=legacy), redis
 
 
 async def test_user_is_limited_to_the_models_key_prefix_and_safe_commands():
@@ -40,30 +40,67 @@ async def test_user_is_limited_to_the_models_key_prefix_and_safe_commands():
     assert "~fastmlapi:ecg:*" in rules
     assert [r for r in rules if r.startswith("~")] == ["~fastmlapi:ecg:*"]      # exactly one key pattern
     assert "resetchannels" in rules and not any(r.startswith("&") for r in rules)  # no pub/sub channels
-    assert rules.index("-@all") < rules.index("+@list")                          # deny everything, then allow
+    assert rules.index("-@all") < rules.index("+lmove")                          # deny everything, then allow
     for dangerous in ("+@admin", "+@dangerous", "+@scripting", "+@pubsub", "+@all", "+@keyspace", "+@connection",
                       "+flushall", "+flushdb", "+swapdb", "+config", "+acl", "+keys", "+eval", "+shutdown", "+debug"):
         assert dangerous not in rules
 
 
-def test_only_data_structure_categories_and_named_commands_are_granted():
-    """Categories can hide key-less destructive commands (@keyspace contains FLUSHALL), so only these are allowed."""
+# the command list of fastmlapi's Redis backend (fastmlapi.queue.redis_backend.REDIS_COMMANDS_USED), copied on purpose: if
+# the library starts using another command this test fails and someone has to decide to grant it
+FASTMLAPI_COMMANDS = (
+    "LMOVE LPUSH RPUSH LREM LRANGE LLEN LPOS HSET HSETNX HGET HMGET HGETALL HDEL HINCRBY EXPIRE SADD SREM SMEMBERS DEL EXISTS "
+    "WATCH UNWATCH MULTI EXEC DISCARD TIME PING"
+).split()
+
+
+def test_strict_mode_grants_exactly_the_commands_the_library_uses_and_no_categories():
+    """Categories hide expensive or destructive commands (@keyspace has FLUSHALL, @string has LCS, @set has SUNIONSTORE)."""
     from app.queue_access.acl import MODEL_COMMANDS
 
-    categories = {r for r in MODEL_COMMANDS if r.startswith("+@")}
-    assert categories == {"+@list", "+@hash", "+@string", "+@set", "+@sortedset"}
-    named = {r for r in MODEL_COMMANDS if r.startswith("+") and not r.startswith("+@")}
-    assert not named & {"+flushall", "+flushdb", "+swapdb", "+keys", "+randomkey", "+move", "+rename", "+dbsize", "+info",
-                        "+eval", "+eval_ro", "+script|flush", "+script|kill", "+script", "+shutdown", "+config", "+acl", "+debug"}
+    granted = {r for r in MODEL_COMMANDS if r.startswith("+")}
+    assert not {r for r in granted if r.startswith("+@")}, "no command categories in strict mode"
+    names = {r[1:].upper() for r in granted if "|" not in r}
+    assert set(FASTMLAPI_COMMANDS) <= names
+    extra = names - set(FASTMLAPI_COMMANDS)
+    assert extra <= {"HELLO", "AUTH"}, f"unexpected extra commands: {extra}"
+    sub = {r for r in granted if "|" in r}
+    assert sub <= {"+client|setinfo", "+client|setname", "+client|id"}
 
 
-def test_commands_fastmlapi_needs_are_allowed():
-    """Found by running the real fastmlapi worker against a real Redis: it uses TIME, Lua scripts (EVALSHA + SCRIPT LOAD),
-    MULTI/EXEC pipelines and SCAN. Without these the queue cannot work."""
+def test_legacy_mode_keeps_the_data_structure_categories_for_older_libraries():
+    from app.queue_access.acl import commands_for
+
+    legacy = commands_for(legacy=True)
+    assert {"+@list", "+@hash", "+@set"} <= set(legacy)
+    assert not {"+@keyspace", "+@dangerous", "+@admin", "+@scripting", "+eval"} & set(legacy)
+
+
+def test_commands_fastmlapi_needs_are_allowed_and_nothing_scripting_or_scanning():
+    """fastmlapi's Redis backend uses lists/hashes/sets, WATCH/MULTI/EXEC transactions, LMOVE and TIME: no Lua, no SCAN."""
     from app.queue_access.acl import MODEL_COMMANDS
 
-    for needed in ("+time", "+evalsha", "+script|load", "+multi", "+exec", "+scan"):
+    for needed in ("+time", "+multi", "+exec", "+watch", "+unwatch", "+discard", "+lmove", "+hset", "+smembers"):
         assert needed in MODEL_COMMANDS
+    for never in ("+eval", "+evalsha", "+script|load", "+scan", "+@scripting", "+keys", "+@keyspace"):
+        assert never not in MODEL_COMMANDS
+
+
+def test_legacy_mode_adds_the_scripting_and_scan_commands_older_fastmlapi_versions_need():
+    from app.queue_access.acl import LEGACY_COMMANDS, MODEL_COMMANDS, commands_for
+
+    assert LEGACY_COMMANDS == ["+evalsha", "+script|load", "+scan"]
+    assert commands_for(legacy=False) == MODEL_COMMANDS
+    assert set(LEGACY_COMMANDS) <= set(commands_for(legacy=True)) and "+eval" not in commands_for(legacy=True)
+
+
+async def test_a_legacy_user_gets_the_extra_commands_and_a_strict_user_does_not():
+    qa, redis = make(legacy=True)
+    await qa.provision("ecg")
+    assert "+evalsha" in redis.commands[0] and "+scan" in redis.commands[0]
+    qa, redis = make(legacy=False)
+    await qa.provision("ecg")
+    assert "+evalsha" not in redis.commands[0] and "+scan" not in redis.commands[0]
 
 
 async def test_returned_url_points_at_the_model_redis_with_the_model_user():
@@ -233,13 +270,32 @@ async def test_verification_is_retried_so_a_late_starting_redis_recovers():
     assert (await qa.provision("ecg")).startswith("redis://m_ecg:")
 
 
-async def test_queue_models_refuse_to_share_a_redis_with_routes_and_keys():
-    """SCAN would list the names of every key (API key ids, model names) in a shared Redis, and a model's Lua script can
-    hang it for everyone, so a dedicated queue Redis is mandatory."""
-    qa, redis = make(dedicated=False)
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_queue_models_never_share_the_redis_that_holds_routes_and_keys(legacy):
+    """Redis cannot cap memory per user: one model filling its keys would exhaust a shared instance, and with noeviction the
+    platform's own route and key writes would start failing. Queues live on a dedicated, memory-capped Redis."""
+    qa, redis = make(dedicated=False, legacy=legacy)
     with pytest.raises(QueueAccessError, match="QUEUE_REDIS_URL"):
         await qa.provision("ecg")
     assert redis.commands == []
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+async def test_a_dedicated_queue_redis_is_accepted(legacy):
+    qa, _ = make(dedicated=True, legacy=legacy)
+    assert (await qa.provision("ecg")).startswith("redis://m_ecg:")
+
+
+def test_services_pass_the_legacy_switch_through():
+    from types import SimpleNamespace
+
+    from app.config import Settings
+    from app.services import build_queue_access
+
+    state = SimpleNamespace(settings=Settings(_env_file=None, queue_acl_secret="s", queue_legacy_acl=True), redis=RecordingRedis())
+    assert build_queue_access(state, state.redis)._legacy is True
+    state.settings = Settings(_env_file=None, queue_acl_secret="s")
+    assert build_queue_access(state, state.redis)._legacy is False
 
 
 def test_services_only_mark_the_queue_redis_dedicated_when_one_is_configured():

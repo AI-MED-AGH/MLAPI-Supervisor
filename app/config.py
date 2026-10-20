@@ -12,12 +12,19 @@ class Settings(BaseSettings):
     # Queue-mode models run untrusted code against Redis (Lua scripts can hang a Redis server), so their queues
     # belong on a separate instance. Unset = share redis_url (fine for development only).
     queue_redis_url: str | None = None
+    # Models built with an older fastmlapi (Lua scripts, SCAN) need broader Redis permissions and a dedicated queue Redis.
+    queue_legacy_acl: bool = False
     model_redis_url: str | None = None  # how model containers reach the queue Redis
     queue_wake_retry_after: float = 60  # after a failed worker start, wait this long before trying again
     worker_heartbeat_grace: float = 10.0  # wait this long for a worker heartbeat before trusting the container
     queue_acl_secret: str = ""
     admin_api_keys: str = ""
     auto_migrate: bool = True
+    # Admin UI sessions. Empty secret = a random one per process (sessions end on restart; set it to keep them).
+    session_secret: str = ""
+    session_ttl: float = 8 * 3600
+    session_cookie_secure: bool | None = None  # None = secure when the request came in over https
+    ui_dir: str | None = None  # built admin UI (index.html + assets); served at /admin when present
 
     cluster_backend: str = "docker"  # docker | kubernetes | fake
     k8s_namespace: str = "mlapi-models"

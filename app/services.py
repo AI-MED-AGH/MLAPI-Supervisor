@@ -78,7 +78,8 @@ def build_queue_access(state, queue_redis=None):
         parts = urlsplit(settings.redis_url)
         base = urlunsplit((parts.scheme, parts.netloc.rpartition("@")[2], parts.path, "", ""))
     return QueueAccess(
-        admin, secret=settings.queue_acl_secret, model_redis_url=base, dedicated=bool(settings.queue_redis_url)
+        admin, secret=settings.queue_acl_secret, model_redis_url=base, dedicated=bool(settings.queue_redis_url),
+        legacy=settings.queue_legacy_acl,
     )
 
 

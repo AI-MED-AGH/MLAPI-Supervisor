@@ -53,3 +53,7 @@ def test_queue_redis_settings_default_to_the_shared_redis():
 
 def test_wake_retry_cooldown_default():
     assert make().queue_wake_retry_after == 60
+
+
+def test_legacy_queue_acl_is_off_by_default():
+    assert make().queue_legacy_acl is False

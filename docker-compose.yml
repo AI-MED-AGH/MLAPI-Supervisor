@@ -52,9 +52,11 @@ services:
       MODEL_REDIS_URL: redis://queue-redis:6379/0
       ADMIN_API_KEYS: ${ADMIN_API_KEYS:?set ADMIN_API_KEYS in .env (python -m app.admin_key)}
       QUEUE_ACL_SECRET: ${QUEUE_ACL_SECRET:-}
+      QUEUE_LEGACY_ACL: ${QUEUE_LEGACY_ACL:-false}
       GHCR_ORG: ${GHCR_ORG:-}
       GHCR_TOKEN: ${GHCR_TOKEN:-}
       DATABASE_URL: ${DATABASE_URL:-}
+      SESSION_SECRET: ${SESSION_SECRET:-}              # keeps admin UI sessions across restarts
     volumes:
       - supervisor_data:/data
       - /var/run/docker.sock:/var/run/docker.sock   # root-equivalent on this host: run only on a trusted device
