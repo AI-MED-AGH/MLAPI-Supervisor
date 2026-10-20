@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     queue_acl_secret: str = ""
     admin_api_keys: str = ""
     auto_migrate: bool = True
+    # Admin UI sessions. Empty secret = a random one per process (sessions end on restart; set it to keep them).
+    session_secret: str = ""
+    session_ttl: float = 8 * 3600
+    session_cookie_secure: bool | None = None  # None = secure when the request came in over https
+    ui_dir: str | None = None  # built admin UI (index.html + assets); served at /admin when present
 
     cluster_backend: str = "docker"  # docker | kubernetes | fake
     k8s_namespace: str = "mlapi-models"

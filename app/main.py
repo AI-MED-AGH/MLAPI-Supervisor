@@ -1,10 +1,14 @@
+import secrets
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import redis.asyncio as aioredis
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.auth import require_admin
+from app.auth_api import router as auth_router
+from app.session import LoginLimiter
 from app.config import Settings, get_settings
 from app.db import SessionLocal
 from app.keys.api import router as keys_router
@@ -70,6 +74,8 @@ def create_app(
     app.state.probe = probe
     app.state.inspector = inspector
     app.state.services = None
+    app.state.session_secret = settings.session_secret or secrets.token_hex(32)
+    app.state.login_limiter = LoginLimiter()
 
     @app.get("/")
     def root() -> dict[str, str]:
@@ -80,6 +86,7 @@ def create_app(
         return {"status": "ok"}
 
     app.include_router(watchmanRouter, prefix="/v1/observers", dependencies=[Depends(require_admin)])
+    app.include_router(auth_router)
     app.include_router(keys_router)
     app.include_router(models_router)
     app.include_router(approvals_router)
@@ -96,7 +103,31 @@ def create_app(
     @app.exception_handler(ResourceError)
     async def _invalid(request: Request, exc: Exception):
         return JSONResponse({"detail": str(exc)}, status_code=422)
+
+    _mount_ui(app, settings)
     return app
+
+
+def _mount_ui(app: FastAPI, settings: Settings) -> None:
+    """Serves the built admin UI at /admin, with the SPA fallback to index.html."""
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    root = Path(settings.ui_dir) if settings.ui_dir else None
+    if root is None or not (root / "index.html").is_file():
+        return
+    root = root.resolve()
+    if (root / "assets").is_dir():
+        app.mount("/admin/assets", StaticFiles(directory=root / "assets"), name="admin-assets")
+
+    @app.get("/admin", include_in_schema=False)
+    @app.get("/admin/{path:path}", include_in_schema=False)
+    async def admin_ui(path: str = ""):
+        candidate = (root / path).resolve()
+        headers = {"Cache-Control": "no-cache", "X-Frame-Options": "DENY", "Referrer-Policy": "same-origin"}
+        if path and candidate.is_file() and root in candidate.parents:
+            return FileResponse(candidate, headers=headers)
+        return FileResponse(root / "index.html", headers=headers)
 
 
 app = create_app()
