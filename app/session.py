@@ -46,9 +46,10 @@ def verify(secret: str, token: str, valid_hashes: set[str], now: float | None = 
 class LoginLimiter:
     """Per-client failed-login throttle (in memory; the Supervisor runs as a single replica)."""
 
-    def __init__(self, max_failures: int = 10, window: float = 300.0):
+    def __init__(self, max_failures: int = 10, window: float = 300.0, max_clients: int = 10_000):
         self.max_failures = max_failures
         self.window = window
+        self.max_clients = max_clients
         self._failures: dict[str, list[float]] = {}
 
     def _recent(self, client: str, now: float) -> list[float]:
@@ -65,6 +66,10 @@ class LoginLimiter:
     def record_failure(self, client: str, now: float | None = None) -> None:
         now = now if now is not None else time.time()
         self._recent(client, now)
+        if client not in self._failures and len(self._failures) >= self.max_clients:
+            # bound memory: forget the client whose last failure is oldest
+            oldest = min(self._failures, key=lambda c: self._failures[c][-1])
+            del self._failures[oldest]
         self._failures.setdefault(client, []).append(now)
 
     def reset(self, client: str) -> None:

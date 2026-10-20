@@ -63,8 +63,21 @@ async def test_no_cookie_no_header_is_401(api):
 async def test_login_is_rate_limited(api):
     for _ in range(10):
         assert (await login(api, "bad")).status_code == 401
-    r = await login(api, ADMIN_KEY)
+    r = await login(api, "bad")
     assert r.status_code == 429 and r.headers["retry-after"]
+
+
+async def test_valid_key_logs_in_even_while_guessers_are_throttled(api):
+    for _ in range(11):
+        await login(api, "bad")
+    assert (await login(api, ADMIN_KEY)).status_code == 204
+
+
+def test_login_limiter_tracks_a_bounded_number_of_clients():
+    limiter = sessions.LoginLimiter(max_clients=3)
+    for i in range(10):
+        limiter.record_failure(f"c{i}", now=float(i))
+    assert len(limiter._failures) == 3 and "c9" in limiter._failures
 
 
 async def test_session_dies_when_admin_key_is_removed(api):

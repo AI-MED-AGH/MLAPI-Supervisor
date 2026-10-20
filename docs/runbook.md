@@ -147,3 +147,7 @@ their own usage (`gpu_memory_fraction` in `fastmlapi`). A model that needs a GPU
 * **Disk limits are not enforced on Docker** (they are sized into the cache volume on Kubernetes).
 * A worker that publishes no liveness record (older fastmlapi) is trusted after 10 s of its container running; current versions
   report `model_loaded` and are only trusted once the model is loaded.
+* **Admin UI sessions are stateless signed cookies** (8 h, `SESSION_TTL`). Logging out clears the browser's cookie but cannot revoke a
+  copy that was already stolen. To end every session at once, remove the key from `ADMIN_API_KEYS` or change `SESSION_SECRET`.
+  Failed UI logins are throttled per client address (a correct key is never throttled); behind a reverse proxy all clients share
+  the proxy's address, so wrong guesses are throttled together.

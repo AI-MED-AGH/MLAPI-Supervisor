@@ -26,10 +26,12 @@ def _secure(request: Request) -> bool:
 async def login(body: LoginBody, request: Request) -> Response:
     state = request.app.state
     client = _client(request)
-    if state.login_limiter.blocked(client):
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed attempts; try again later", headers={"Retry-After": "300"})
     matched = match_admin_key(body.key, state.settings.admin_hashes)
     if matched is None:
+        # Only wrong guesses are throttled and a valid key always gets in, so someone behind the same proxy address
+        # cannot lock the admin out. (Keys are 256-bit random values, so the throttle only slows noise.)
+        if state.login_limiter.blocked(client):
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed attempts; try again later", headers={"Retry-After": "300"})
         state.login_limiter.record_failure(client)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid admin key")
     state.login_limiter.reset(client)
