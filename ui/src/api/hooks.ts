@@ -8,8 +8,10 @@ import {
   approval,
   approveResult,
   configResult,
+  keyUsage,
   model,
   modelDetail,
+  modelMetrics,
   observer,
   registerResult,
 } from "./schemas";
@@ -40,6 +42,18 @@ export const useModel = (name: string) =>
     refetchInterval: (q) => (q.state.data && TRANSITIONAL.has(q.state.data.state) ? POLL_BUSY : POLL_IDLE),
   });
 
+const METRICS_POLL: Record<string, number> = { "1h": 5_000, "24h": 30_000, "30d": 300_000, "1y": 300_000 };
+
+/** Resource use of one model; the finer the range, the faster it refreshes. Keeps the old chart while reloading. */
+export const useModelMetrics = (name: string, range: string) =>
+  useQuery({
+    queryKey: ["models", name, "metrics", range] as const,
+    queryFn: ({ signal }) =>
+      request("GET", `/v1/models/${encodeURIComponent(name)}/metrics?range=${range}`, modelMetrics, { signal }),
+    placeholderData: keepPreviousData,
+    refetchInterval: METRICS_POLL[range] ?? 30_000,
+  });
+
 export const useApprovals = (status: "pending" | "all") =>
   useQuery({
     queryKey: qk.approvals(status),
@@ -50,6 +64,14 @@ export const useApprovals = (status: "pending" | "all") =>
 
 export const useKeys = () =>
   useQuery({ queryKey: qk.keys, queryFn: ({ signal }) => request("GET", "/v1/keys", z.array(apiKey), { signal }) });
+
+/** What a key was used for over the last `days` days (the Router keeps 35). Only fetched while the dialog is open. */
+export const useKeyUsage = (id: string, days: number) =>
+  useQuery({
+    queryKey: ["keys", id, "usage", days] as const,
+    queryFn: ({ signal }) => request("GET", `/v1/keys/${id}/usage?days=${days}`, keyUsage, { signal }),
+    placeholderData: keepPreviousData,
+  });
 
 export const useObservers = () =>
   useQuery({
@@ -102,7 +124,7 @@ export const useReject = () =>
     request("POST", `/v1/approvals/${id}/reject`, model, { body: { note: note || null } }),
   );
 export const useCreateKey = () =>
-  useAction((body: { name: string; allowed_models: string[]; allow_all: boolean; expires_at?: number | null }) =>
+  useAction((body: { name: string; allowed_models: string[]; allow_all: boolean; expires_at?: number | null; limits?: Record<string, number> }) =>
     request("POST", "/v1/keys", apiKeyCreated, { body }),
   );
 export const usePatchKey = () =>

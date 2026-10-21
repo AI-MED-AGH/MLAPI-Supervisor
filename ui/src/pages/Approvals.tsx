@@ -51,7 +51,7 @@ function ApproveDialog({ request, onClose }: { request: Approval | null; onClose
   return (
     <Dialog open={!!request} onClose={onClose} title={request ? `Approve ${request.model}` : "Approve"}>
       <form onSubmit={submit} className="space-y-4">
-        <p className="text-sm text-slate-600 dark:text-slate-400">
+        <p className="text-sm text-mute">
           Approving deploys <Mono>{shortDigest(request?.digest)}</Mono> with these limits. Lower the values to grant less than requested.
         </p>
         <div className="grid gap-4 sm:grid-cols-3">
@@ -61,7 +61,7 @@ function ApproveDialog({ request, onClose }: { request: Approval | null; onClose
         </div>
         <Checkbox label="Allow GPU" checked={gpu} disabled={!r?.gpu} onChange={(e) => setGpu(e.target.checked)} />
         {error && (
-          <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+          <p role="alert" className="border-l-2 border-ink pl-3 text-sm font-medium">
             {error}
           </p>
         )}
@@ -92,7 +92,7 @@ function RejectDialog({ request, onClose }: { request: Approval | null; onClose:
   return (
     <Dialog open={!!request} onClose={onClose} title={request ? `Reject ${request.model}` : "Reject"}>
       <form onSubmit={submit} className="space-y-4">
-        <p className="text-sm text-slate-600 dark:text-slate-400">
+        <p className="text-sm text-mute">
           The running version is untouched. This digest will not be deployed or requested again.
         </p>
         <Field label="Note (optional)">
@@ -123,14 +123,14 @@ export function ApprovalsPage() {
         title="Approvals"
         subtitle="Models request CPU, memory, disk and GPU through image labels. Pods only ever get what you approve."
         actions={
-          <div role="group" aria-label="Show" className="inline-flex overflow-hidden rounded-lg border border-slate-300 dark:border-slate-700">
+          <div role="group" aria-label="Show" className="inline-flex overflow-hidden rounded-md border border-rule">
             {(["pending", "all"] as const).map((s) => (
               <button
                 key={s}
                 type="button"
                 aria-pressed={scope === s}
                 onClick={() => setScope(s)}
-                className={`px-3.5 py-2 text-sm font-medium ${scope === s ? "bg-brand-600 text-white" : "bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800"}`}
+                className={`px-3.5 py-2 text-sm font-medium transition-colors duration-150 ${scope === s ? "bg-ink text-canvas" : "text-mute hover:bg-raised hover:text-ink"}`}
               >
                 {s === "pending" ? "Pending" : "History"}
               </button>
@@ -145,7 +145,7 @@ export function ApprovalsPage() {
       ) : list.data.length === 0 ? (
         <EmptyState title={scope === "pending" ? "Nothing waiting for approval" : "No approval requests yet"} />
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3">
           {list.data.map((a) => (
             <Card
               key={a.id}
@@ -166,7 +166,7 @@ export function ApprovalsPage() {
               }
             >
               <ResourceTable approved={a.currently_approved} requested={a.requested} />
-              <p className="mt-3 text-xs text-slate-500">
+              <p className="mt-4 text-xs text-mute">
                 Requested {formatTime(a.created_at)}
                 {a.decided_at && ` · decided ${formatTime(a.decided_at)}${a.decided_by ? ` by ${a.decided_by}` : ""}`}
                 {a.note && ` · “${a.note}”`}

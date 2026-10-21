@@ -11,8 +11,8 @@ API keys, puts idle models to sleep and wakes them on demand, and notifies webho
             Redis  ◄── routes, keys, schemas ───────────────┘
 ```
 
-The Supervisor is **never** exposed to clients. It has an admin API only (no UI yet; every endpoint is described by
-OpenAPI at `/docs`).
+The Supervisor is **never** exposed to clients. It has an admin API and an admin UI (`/admin`); with `ENABLE_DOCS=true`
+every endpoint is described by OpenAPI at `/docs`.
 
 ## Run it
 
@@ -41,7 +41,9 @@ Po polsku: [instalacja dla administratora](docs/pl/instalacja-admin.md) i
 ## Admin UI
 
 Open `http://127.0.0.1:8001/admin` and sign in with an admin key (the same keys as `X-Admin-Key`). The UI manages models
-(deploy, rollback, sleep/wake, config, delete), resource approvals, API keys and webhook observers.
+(deploy, rollback, sleep/wake, config, delete), resource approvals, API keys and webhook observers. On a key's row,
+**Edit** sets its limits and **Usage** shows what it was used for (requests, model errors and refusals per model, up to 30
+days). A model's page has a **Rate limits** card that shows what the image asks for and what applies, and lets you override it.
 
 - Login (`POST /v1/auth/login`) sets a signed `HttpOnly`, `SameSite=Strict` session cookie (`SESSION_TTL`, default 8 h; `Secure`
   automatically over https or `X-Forwarded-Proto: https`). The key is never stored in the browser. Cookie-authenticated

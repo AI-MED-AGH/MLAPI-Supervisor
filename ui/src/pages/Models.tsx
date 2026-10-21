@@ -45,7 +45,7 @@ function RegisterDialog({ open, onClose }: { open: boolean; onClose: () => void 
   return (
     <Dialog open={open} onClose={onClose} title="Register a model">
       <form onSubmit={submit} className="space-y-4">
-        <p className="text-sm text-slate-600 dark:text-slate-400">
+        <p className="text-sm text-mute">
           The image must carry the <Mono>mlapi.model=true</Mono> label. Resources it requests need your approval before it is deployed.
         </p>
         <Field label="Image" hint="e.g. ghcr.io/ai-med-agh/pneumonia-xray:latest, or a local image tag">
@@ -99,7 +99,7 @@ export function ModelsPage() {
           </Button>
         }
       />
-      <div className="mb-4 flex flex-wrap gap-3">
+      <div className="mb-6 flex flex-wrap gap-3">
         <div className="min-w-48 flex-1">
           <Input aria-label="Search models" type="search" placeholder="Search name or image…" value={query} onChange={(e) => setQuery(e.target.value)} />
         </div>
@@ -125,19 +125,19 @@ export function ModelsPage() {
       ) : (
         <Table head={["Name", "State", "Mode", "Digest", "Approved resources", "Updated"]}>
           {rows.map((m) => (
-            <tr key={m.name} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+            <tr key={m.name}>
               <Td>
-                <Link to={`/models/${encodeURIComponent(m.name)}`} className="font-medium text-brand-700 hover:underline dark:text-brand-100">
+                <Link to={`/models/${encodeURIComponent(m.name)}`} className="font-medium underline-offset-4 hover:underline">
                   {m.name}
                 </Link>
-                <p className="max-w-xs truncate text-xs text-slate-500" title={m.image}>
+                <p className="mt-0.5 max-w-xs truncate font-mono text-xs text-mute" title={m.image}>
                   {m.image}
                 </p>
               </Td>
               <Td>
                 <StateBadge state={m.state} />
                 {m.pending_digest && m.state !== "pending_approval" && (
-                  <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">update awaiting approval</p>
+                  <span className="mt-1.5 block"><Badge tone="amber">update awaiting approval</Badge></span>
                 )}
               </Td>
               <Td>
@@ -146,12 +146,12 @@ export function ModelsPage() {
               <Td>
                 <Mono>{shortDigest(m.current_digest)}</Mono>
               </Td>
-              <Td className="text-xs whitespace-nowrap">
+              <Td className="font-mono text-xs whitespace-nowrap">
                 {m.approved_resources
                   ? `${formatCpu(m.approved_resources.cpu_m)} CPU · ${formatBytes(m.approved_resources.memory_bytes)}${m.approved_resources.gpu ? " · GPU" : ""}`
                   : "—"}
               </Td>
-              <Td className="text-xs whitespace-nowrap text-slate-500">{timeAgo(m.updated_at)}</Td>
+              <Td className="font-mono text-xs whitespace-nowrap text-mute">{timeAgo(m.updated_at)}</Td>
             </tr>
           ))}
         </Table>

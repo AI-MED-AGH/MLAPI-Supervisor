@@ -15,7 +15,7 @@ export function ResourceTable({ approved, requested }: { approved: Resources | n
   const over = requested ? exceeded(requested, approved) : new Set<keyof Resources>();
   return (
     <table className="w-full text-sm">
-      <thead className="text-left text-xs text-slate-500">
+      <thead className="text-left text-xs text-mute">
         <tr>
           <th scope="col" className="pb-2 font-medium" />
           <th scope="col" className="pb-2 font-medium">Approved</th>
@@ -24,12 +24,12 @@ export function ResourceTable({ approved, requested }: { approved: Resources | n
       </thead>
       <tbody>
         {ROWS.map((r) => (
-          <tr key={r.key} className="border-t border-slate-100 dark:border-slate-800">
-            <th scope="row" className="py-2 pr-4 text-left font-normal text-slate-600 dark:text-slate-400">{r.label}</th>
-            <td className="py-2 pr-4 tabular-nums">{approved ? r.show(approved) : "—"}</td>
-            <td className={cx("py-2 tabular-nums", over.has(r.key) && "font-semibold text-amber-700 dark:text-amber-400")}>
+          <tr key={r.key} className="border-t border-hairline">
+            <th scope="row" className="py-2.5 pr-4 text-left font-normal text-mute">{r.label}</th>
+            <td className="py-2.5 pr-4 font-mono tabular-nums">{approved ? r.show(approved) : "—"}</td>
+            <td className={cx("py-2.5 font-mono tabular-nums", over.has(r.key) && "font-semibold")}>
               {requested ? r.show(requested) : "—"}
-              {over.has(r.key) && <span className="ml-2 text-xs">needs approval</span>}
+              {over.has(r.key) && <span className="ml-3 rounded-sm border border-dashed border-rule px-1.5 py-0.5 font-sans text-[11px] font-normal">needs approval</span>}
             </td>
           </tr>
         ))}

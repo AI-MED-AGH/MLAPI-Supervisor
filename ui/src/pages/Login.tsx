@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { ApiError } from "../api/client";
 import { useAuth } from "../auth";
-import { Button, Card, Field, Input } from "../components/ui";
+import { Button, Field, Input, Logo } from "../components/ui";
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -28,15 +28,22 @@ export function LoginPage() {
   }
 
   return (
-    <main className="grid min-h-screen place-items-center px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="text-center">
-          <span className="mx-auto grid size-12 place-items-center rounded-xl bg-brand-600 text-lg font-bold text-white">M</span>
-          <h1 className="mt-4 text-2xl font-semibold tracking-tight">MLAPI Supervisor</h1>
-          <p className="mt-1 text-sm text-slate-600 dark:text-slate-400">Sign in with an admin key.</p>
-        </div>
-        <Card>
-          <form onSubmit={submit} className="space-y-4">
+    <main className="grid min-h-dvh lg:grid-cols-[1.15fr_1fr]">
+      <aside className="relative flex flex-col justify-between overflow-hidden bg-sunken px-8 py-10 sm:px-14 lg:py-14">
+        <Logo kind="mark" className="pointer-events-none absolute -right-24 -bottom-32 size-[34rem] opacity-[0.07] max-lg:hidden" />
+        <Logo kind="wordmark" className="relative h-24 self-start text-ink max-lg:h-16" />
+        <p className="relative mt-16 max-w-sm text-2xl leading-snug font-medium tracking-[-0.02em] max-lg:hidden">
+          Deploy models, approve their resources, issue API keys.
+        </p>
+      </aside>
+
+      <div className="flex items-center px-8 py-14 sm:px-14">
+        <div className="page w-full max-w-sm">
+          <div>
+            <p className="font-mono text-xs text-mute">MLAPI Supervisor</p>
+            <h1 className="mt-2 text-5xl font-semibold tracking-[-0.04em]">Sign in</h1>
+          </div>
+          <form onSubmit={submit} className="mt-10 space-y-5">
             <Field label="Admin key" error={error}>
               {(p) => (
                 <Input
@@ -50,14 +57,15 @@ export function LoginPage() {
                 />
               )}
             </Field>
-            <Button type="submit" variant="primary" busy={busy} disabled={!key.trim()} className="w-full">
+            <Button type="submit" variant="primary" busy={busy} disabled={!key.trim()} className="w-full py-2.5">
               Sign in
             </Button>
           </form>
-        </Card>
-        <p className="text-center text-xs text-slate-500">
-          Keys are configured with <code>ADMIN_API_KEYS</code>. Generate one with <code>python -m app.admin_key</code>.
-        </p>
+          <p className="mt-8 text-xs leading-relaxed text-mute">
+            Keys are configured with <code className="font-mono text-ink">ADMIN_API_KEYS</code>. Generate one with{" "}
+            <code className="font-mono text-ink">python -m app.admin_key</code>.
+          </p>
+        </div>
       </div>
     </main>
   );

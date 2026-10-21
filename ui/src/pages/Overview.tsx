@@ -5,14 +5,14 @@ import { stateLabel } from "../lib/state";
 import { timeAgo } from "../lib/format";
 import { Badge, Card, EmptyState, ErrorState, Loading, PageHeader, StateBadge } from "../components/ui";
 
-function Stat({ label, value, to, tone }: { label: string; value: number | string; to: string; tone?: "warn" }) {
+function Stat({ label, value, to, attention }: { label: string; value: number | string; to: string; attention?: boolean }) {
   return (
-    <Link
-      to={to}
-      className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm transition-colors hover:border-brand-500 dark:border-slate-800 dark:bg-slate-900"
-    >
-      <p className="text-sm text-slate-600 dark:text-slate-400">{label}</p>
-      <p className={`mt-1 text-3xl font-semibold ${tone === "warn" && Number(value) > 0 ? "text-amber-600" : ""}`}>{value}</p>
+    <Link to={to} className="group relative flex flex-col gap-6 px-0 py-6 transition-colors duration-150 hover:bg-raised sm:px-6 sm:first:pl-0">
+      <span className="flex items-center gap-2 text-sm text-mute transition-colors group-hover:text-ink">
+        {label}
+        {attention && <span className="rounded-sm border border-dashed border-rule px-1.5 font-mono text-[11px] text-ink">review</span>}
+      </span>
+      <span className="font-mono text-6xl leading-none font-light tracking-[-0.06em] tabular-nums">{value}</span>
     </Link>
   );
 }
@@ -42,23 +42,23 @@ export function OverviewPage() {
           </Badge>
         }
       />
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid divide-y divide-hairline border-y border-ink/70 sm:grid-cols-2 sm:divide-x sm:divide-y-0 lg:grid-cols-4">
         <Stat label="Models" value={list.length} to="/models" />
         <Stat label="Ready" value={list.filter((m) => m.state === "ready").length} to="/models" />
-        <Stat label="Pending approvals" value={approvals.data?.length ?? "–"} to="/approvals" tone="warn" />
+        <Stat label="Pending approvals" value={approvals.data?.length ?? "–"} to="/approvals" attention={(approvals.data?.length ?? 0) > 0} />
         <Stat label="Active API keys" value={activeKeys ?? "–"} to="/keys" />
       </div>
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
+      <div className="mt-12 grid gap-6 lg:grid-cols-[5fr_7fr]">
         <Card title="Models by state">
           {counts.length === 0 ? (
-            <EmptyState title="No models yet" hint="Register a model image or enable GHCR polling." action={<Link className="text-sm text-brand-600 underline" to="/models">Go to models</Link>} />
+            <EmptyState title="No models yet" hint="Register a model image or enable GHCR polling." action={<Link className="text-sm font-medium underline underline-offset-4" to="/models">Go to models</Link>} />
           ) : (
-            <ul className="space-y-2">
+            <ul className="space-y-3">
               {counts.map(([state, n]) => (
                 <li key={state} className="flex items-center justify-between">
                   <StateBadge state={state} />
-                  <span className="text-sm tabular-nums" aria-label={`${n} ${stateLabel(state)}`}>{n}</span>
+                  <span className="font-mono text-sm tabular-nums" aria-label={`${n} ${stateLabel(state)}`}>{n}</span>
                 </li>
               ))}
             </ul>
@@ -66,16 +66,16 @@ export function OverviewPage() {
         </Card>
         <Card title="Needs attention">
           {attention.length === 0 ? (
-            <p className="text-sm text-slate-600 dark:text-slate-400">Nothing needs attention.</p>
+            <p className="text-sm text-mute">Nothing needs attention.</p>
           ) : (
-            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+            <ul className="divide-y divide-hairline">
               {attention.map((m) => (
                 <li key={m.name} className="flex items-center justify-between gap-3 py-2.5">
                   <div className="min-w-0">
                     <Link to={`/models/${encodeURIComponent(m.name)}`} className="font-medium hover:underline">
                       {m.name}
                     </Link>
-                    <p className="truncate text-xs text-slate-500">{m.state_detail ?? `updated ${timeAgo(m.updated_at)}`}</p>
+                    <p className="truncate text-xs text-mute">{m.state_detail ?? `updated ${timeAgo(m.updated_at)}`}</p>
                   </div>
                   <StateBadge state={m.state} />
                 </li>

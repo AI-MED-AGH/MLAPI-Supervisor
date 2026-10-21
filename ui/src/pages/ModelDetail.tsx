@@ -4,7 +4,9 @@ import { ApiError } from "../api/client";
 import { useDeleteModel, useModel, useModelAction, usePatchConfig } from "../api/hooks";
 import type { ModelDetail } from "../api/schemas";
 import { Badge, Button, Card, Checkbox, ConfirmDialog, ErrorState, Field, Input, inputClass, Loading, Mono, PageHeader, StateBadge, Table, Td } from "../components/ui";
+import { ModelLimits } from "../components/ModelLimits";
 import { ResourceTable } from "../components/ResourceTable";
+import { UsagePanel } from "../components/UsagePanel";
 import { useToast } from "../components/toast";
 import { envToText, parseEnv, splitList } from "../lib/config";
 import { formatTime, shortDigest } from "../lib/format";
@@ -88,8 +90,8 @@ export function ModelDetailPage() {
 
   return (
     <>
-      <p className="mb-2 text-sm">
-        <Link to="/models" className="text-brand-700 hover:underline dark:text-brand-100">← Models</Link>
+      <p className="mb-6 text-sm">
+        <Link to="/models" className="text-mute transition-colors hover:text-ink">← Models</Link>
       </p>
       <PageHeader
         title={
@@ -112,49 +114,51 @@ export function ModelDetailPage() {
       />
 
       {m.state_detail && (
-        <p role="status" className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+        <p role="status" className="mb-8 rounded-lg border border-dashed border-rule bg-raised px-4 py-3 text-sm">
           {m.state_detail}
         </p>
       )}
       {m.pending_digest && m.state !== "pending_approval" && (
-        <p className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+        <p className="mb-8 rounded-lg border border-dashed border-rule bg-raised px-4 py-3 text-sm">
           A newer version (<Mono>{shortDigest(m.pending_digest)}</Mono>) requests more resources. The current version keeps running.{" "}
           <Link to="/approvals" className="font-medium underline">Review approval</Link>
         </p>
       )}
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-4 lg:grid-cols-2">
         <Card title="Runtime">
-          <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
-            <dt className="text-slate-500">Current digest</dt><dd><Mono>{shortDigest(m.current_digest)}</Mono></dd>
-            <dt className="text-slate-500">Previous digest</dt><dd><Mono>{shortDigest(m.previous_digest)}</Mono></dd>
-            {m.failed_digest && (<><dt className="text-slate-500">Failed digest</dt><dd><Mono>{shortDigest(m.failed_digest)}</Mono></dd></>)}
-            <dt className="text-slate-500">Source</dt><dd>{m.source}</dd>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-8 gap-y-2.5 text-sm">
+            <dt className="text-mute">Current digest</dt><dd><Mono>{shortDigest(m.current_digest)}</Mono></dd>
+            <dt className="text-mute">Previous digest</dt><dd><Mono>{shortDigest(m.previous_digest)}</Mono></dd>
+            {m.failed_digest && (<><dt className="text-mute">Failed digest</dt><dd><Mono>{shortDigest(m.failed_digest)}</Mono></dd></>)}
+            <dt className="text-mute">Source</dt><dd>{m.source}</dd>
             {m.runtime ? (
               <>
-                <dt className="text-slate-500">Pods ready</dt><dd>{m.runtime.ready ? "yes" : "no"} ({m.runtime.replicas} replica{m.runtime.replicas === 1 ? "" : "s"})</dd>
-                <dt className="text-slate-500">Restarts</dt><dd className={m.runtime.restarts > 0 ? "text-amber-700 dark:text-amber-400" : ""}>{m.runtime.restarts}</dd>
-                {m.runtime.pending_reason && (<><dt className="text-slate-500">Pending reason</dt><dd>{m.runtime.pending_reason}</dd></>)}
+                <dt className="text-mute">Pods ready</dt><dd>{m.runtime.ready ? "yes" : "no"} ({m.runtime.replicas} replica{m.runtime.replicas === 1 ? "" : "s"})</dd>
+                <dt className="text-mute">Restarts</dt><dd className={m.runtime.restarts > 0 ? "font-semibold" : ""}>{m.runtime.restarts}</dd>
+                {m.runtime.pending_reason && (<><dt className="text-mute">Pending reason</dt><dd>{m.runtime.pending_reason}</dd></>)}
               </>
             ) : (
-              <><dt className="text-slate-500">Runtime</dt><dd className="text-slate-500">status unavailable</dd></>
+              <><dt className="text-mute">Runtime</dt><dd className="text-mute">status unavailable</dd></>
             )}
-            {m.worker_state && (<><dt className="text-slate-500">Worker</dt><dd>{m.worker_state}</dd></>)}
-            <dt className="text-slate-500">Last checked</dt><dd>{formatTime(m.last_checked_at)}</dd>
-            <dt className="text-slate-500">Created</dt><dd>{formatTime(m.created_at)}</dd>
+            {m.worker_state && (<><dt className="text-mute">Worker</dt><dd>{m.worker_state}</dd></>)}
+            <dt className="text-mute">Last checked</dt><dd>{formatTime(m.last_checked_at)}</dd>
+            <dt className="text-mute">Created</dt><dd>{formatTime(m.created_at)}</dd>
           </dl>
         </Card>
         <Card title="Resources">
           <ResourceTable approved={m.approved_resources} requested={m.requested_resources} />
         </Card>
+        {m.state !== "removed" && m.state !== "pending_approval" && <UsagePanel model={m} />}
+        {!removed && <ModelLimits key={JSON.stringify(m.config.limits ?? {})} model={m} />}
         <Card title="Configuration" className="lg:col-span-2">
-          {removed ? <p className="text-sm text-slate-500">This model was removed.</p> : <ConfigEditor key={m.updated_at} model={m} />}
+          {removed ? <p className="text-sm text-mute">This model was removed.</p> : <ConfigEditor key={m.updated_at} model={m} />}
         </Card>
       </div>
 
-      <h2 className="mt-8 mb-3 text-lg font-semibold">Deploy history</h2>
+      <h2 className="mt-16 mb-4 text-2xl font-semibold tracking-[-0.025em]">Deploy history</h2>
       {m.deployments.length === 0 ? (
-        <p className="text-sm text-slate-500">No deployments yet.</p>
+        <p className="text-sm text-mute">No deployments yet.</p>
       ) : (
         <Table head={["Started", "Digest", "Result", "Finished", "Reason"]}>
           {m.deployments.map((d, i) => (
@@ -163,16 +167,16 @@ export function ModelDetailPage() {
               <Td><Mono>{shortDigest(d.digest)}</Mono></Td>
               <Td><Badge tone={d.status === "succeeded" ? "green" : d.status === "failed" ? "red" : "amber"}>{d.status.replace("_", " ")}</Badge></Td>
               <Td className="whitespace-nowrap">{formatTime(d.finished_at)}</Td>
-              <Td className="max-w-sm text-xs text-slate-600 dark:text-slate-400">{d.reason ?? "—"}</Td>
+              <Td className="max-w-sm text-xs text-mute">{d.reason ?? "—"}</Td>
             </tr>
           ))}
         </Table>
       )}
 
       {m.schema != null && (
-        <details className="mt-8 rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+        <details className="mt-10 rounded-lg bg-raised p-4">
           <summary className="cursor-pointer text-sm font-semibold">Request / response schema</summary>
-          <pre className="mt-3 max-h-96 overflow-auto rounded-lg bg-slate-100 p-3 text-xs dark:bg-slate-950">{JSON.stringify(m.schema, null, 2)}</pre>
+          <pre className="mt-3 max-h-96 overflow-auto rounded-md bg-sunken p-3 font-mono text-xs">{JSON.stringify(m.schema, null, 2)}</pre>
         </details>
       )}
 

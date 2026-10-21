@@ -6,7 +6,10 @@ import { ApiError } from "./api/client";
 import { App } from "./App";
 import { AuthProvider } from "./auth";
 import { ToastProvider } from "./components/toast";
+import { applyTheme, storedTheme } from "./lib/theme";
 import "./index.css";
+
+applyTheme(storedTheme()); // before first render, so the sign-in page is themed too
 
 const queryClient = new QueryClient({
   defaultOptions: {

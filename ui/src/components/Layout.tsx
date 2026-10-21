@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useApprovals } from "../api/hooks";
 import { useAuth } from "../auth";
-import { Button, cx } from "./ui";
+import { applyTheme, storedTheme } from "../lib/theme";
+import { Button, cx, Logo } from "./ui";
 
 const NAV = [
   { to: "/", label: "Overview", end: true },
@@ -12,24 +13,22 @@ const NAV = [
   { to: "/observers", label: "Observers" },
 ];
 
+function Account({ className, dark, toggle, logout }: { className?: string; dark: boolean; toggle: () => void; logout: () => Promise<void> }) {
+  return (
+    <div className={cx("flex items-center gap-1", className)}>
+      <Button variant="ghost" onClick={toggle} aria-pressed={dark} className="px-2.5">
+        {dark ? "Light theme" : "Dark theme"}
+      </Button>
+      <Button variant="ghost" onClick={() => void logout()} className="px-2.5">
+        Sign out
+      </Button>
+    </div>
+  );
+}
+
 function useTheme() {
-  const [dark, setDark] = useState(() => {
-    try {
-      const saved = localStorage.getItem("theme");
-      if (saved) return saved === "dark";
-    } catch {
-      /* storage blocked */
-    }
-    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
-  });
-  useEffect(() => {
-    document.documentElement.classList.toggle("dark", dark);
-    try {
-      localStorage.setItem("theme", dark ? "dark" : "light");
-    } catch {
-      /* storage blocked */
-    }
-  }, [dark]);
+  const [dark, setDark] = useState(() => storedTheme() === "dark");
+  useEffect(() => applyTheme(dark ? "dark" : "light"), [dark]);
   return [dark, () => setDark((d) => !d)] as const;
 }
 
@@ -37,70 +36,65 @@ export function Layout() {
   const { logout } = useAuth();
   const [dark, toggle] = useTheme();
   const [open, setOpen] = useState(false);
+  const { pathname } = useLocation();
   const pending = useApprovals("pending").data?.length ?? 0;
 
-  const nav = (
-    <nav aria-label="Main" className="flex flex-col gap-1">
-      {NAV.map((item) => (
-        <NavLink
-          key={item.to}
-          to={item.to}
-          end={item.end}
-          onClick={() => setOpen(false)}
-          className={({ isActive }) =>
-            cx(
-              "flex items-center justify-between rounded-lg px-3 py-2 text-sm font-medium",
-              isActive
-                ? "bg-brand-50 text-brand-700 dark:bg-brand-600/20 dark:text-brand-100"
-                : "text-slate-700 hover:bg-slate-200/60 dark:text-slate-300 dark:hover:bg-slate-800",
-            )
-          }
-        >
-          {item.label}
-          {item.badge && pending > 0 && (
-            <span aria-label={`${pending} pending`} className="rounded-full bg-amber-500 px-2 text-xs font-semibold text-white">
-              {pending}
-            </span>
-          )}
-        </NavLink>
-      ))}
-    </nav>
-  );
-
   return (
-    <div className="min-h-screen lg:grid lg:grid-cols-[15rem_1fr]">
-      <header className="flex items-center justify-between border-b border-slate-200 bg-white px-4 py-3 lg:hidden dark:border-slate-800 dark:bg-slate-900">
-        <span className="font-semibold">MLAPI Supervisor</span>
-        <Button aria-expanded={open} aria-controls="sidebar" onClick={() => setOpen((o) => !o)}>
-          Menu
-        </Button>
-      </header>
-      <aside
-        id="sidebar"
-        className={cx(
-          "flex-col gap-6 border-r border-slate-200 bg-white p-4 lg:sticky lg:top-0 lg:flex lg:h-screen dark:border-slate-800 dark:bg-slate-900",
-          open ? "flex" : "hidden",
-        )}
+    <>
+      <a
+        href="#content"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:rounded-md focus:bg-ink focus:px-3 focus:py-2 focus:text-sm focus:text-canvas"
       >
-        <div className="hidden items-center gap-2 px-2 pt-1 lg:flex">
-          <span className="grid size-8 place-items-center rounded-lg bg-brand-600 text-sm font-bold text-white">M</span>
-          <span className="font-semibold">MLAPI Supervisor</span>
+        Skip to content
+      </a>
+      <header className="sticky top-0 z-30 border-b border-hairline bg-canvas/80 backdrop-blur-md">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-8 px-4 sm:px-8">
+          <Link to="/" className="flex h-16 items-center gap-3 rounded-md">
+            <Logo className="size-8" />
+            <span className="text-[15px] font-semibold tracking-[-0.02em]">
+              MLAPI <span className="font-normal text-mute">Supervisor</span>
+            </span>
+          </Link>
+
+          <nav id="main-nav" aria-label="Main" className={cx("order-last w-full flex-col pb-3 md:order-none md:flex md:w-auto md:flex-row md:gap-1 md:pb-0", open ? "flex" : "hidden")}>
+            {NAV.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                onClick={() => setOpen(false)}
+                className={({ isActive }) =>
+                  cx(
+                    "relative flex items-center gap-2 px-3 py-2.5 text-sm font-medium transition-colors duration-150 md:h-16 md:py-0",
+                    "after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:origin-left after:bg-ink after:transition-transform after:duration-200 max-md:after:hidden",
+                    isActive ? "text-ink after:scale-x-100" : "text-mute after:scale-x-0 hover:text-ink",
+                  )
+                }
+              >
+                {item.label}
+                {item.badge && pending > 0 && (
+                  <span aria-label={`${pending} pending`} className="grid min-w-5 place-items-center rounded-sm bg-ink px-1 font-mono text-[11px] leading-5 font-semibold text-canvas tabular-nums">
+                    {pending}
+                  </span>
+                )}
+              </NavLink>
+            ))}
+          </nav>
+
+          <div className="ml-auto flex items-center gap-1">
+            <Account className="max-md:hidden" dark={dark} toggle={toggle} logout={logout} />
+            <Button variant="ghost" className="px-2.5 md:hidden" aria-expanded={open} aria-controls="main-nav" onClick={() => setOpen((o) => !o)}>
+              Menu
+            </Button>
+          </div>
+          {open && <Account className="order-last w-full border-t border-hairline py-2 md:hidden" dark={dark} toggle={toggle} logout={logout} />}
         </div>
-        {nav}
-        <div className="mt-auto flex flex-col gap-2">
-          <Button variant="ghost" onClick={toggle} aria-pressed={dark}>
-            {dark ? "Light theme" : "Dark theme"}
-          </Button>
-          <Button variant="ghost" onClick={() => void logout()}>
-            Sign out
-          </Button>
-        </div>
-      </aside>
-      <main className="min-w-0 px-4 py-6 sm:px-8 sm:py-8">
-        <div className="mx-auto max-w-6xl">
+      </header>
+      <main id="content" className="mx-auto max-w-6xl px-4 pt-12 pb-24 sm:px-8 sm:pt-16">
+        <div key={pathname} className="page">
           <Outlet />
         </div>
       </main>
-    </div>
+    </>
   );
 }

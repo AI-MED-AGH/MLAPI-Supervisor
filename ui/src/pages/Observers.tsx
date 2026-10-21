@@ -74,7 +74,7 @@ function AddForm({ onClose }: { onClose: () => void }) {
         {(p) => <Input {...p} value={custom} onChange={(e) => setCustom(e.target.value)} />}
       </Field>
       {error && (
-        <p role="alert" className="text-sm text-red-600 dark:text-red-400">
+        <p role="alert" className="border-l-2 border-ink pl-3 text-sm font-medium">
           {error}
         </p>
       )}

@@ -26,6 +26,7 @@ export const modelConfig = z
     secret_refs: z.array(z.string()).optional(),
     idle_timeout_s: z.number().optional(),
     max_job_seconds: z.number().optional(),
+    limits: z.record(z.string(), z.number()).optional(),
   })
   .catchall(z.unknown());
 export type ModelConfig = z.infer<typeof modelConfig>;
@@ -44,6 +45,8 @@ export const model = z.object({
   approved_resources: resources.nullable(),
   requested_resources: resources.nullable(),
   config: modelConfig,
+  declared_limits: z.record(z.string(), z.number()).default({}),
+  limits: z.record(z.string(), z.number()).default({}),
   created_at: z.number().nullable(),
   updated_at: z.number().nullable(),
   last_checked_at: z.number().nullable(),
@@ -95,6 +98,7 @@ export const apiKey = z.object({
   allowed_models: z.array(z.string()),
   allow_all: z.boolean(),
   expires_at: z.number().nullable(),
+  limits: z.record(z.string(), z.number()).default({}),
   revoked_at: z.number().nullable(),
   created_at: z.number(),
 });
@@ -112,3 +116,28 @@ export type Observer = z.infer<typeof observer>;
 export const registerResult = z.object({ action: z.string(), model: model });
 export const configResult = z.object({ redeploy: z.boolean(), model });
 export const approveResult = z.object({ deploy_started: z.boolean(), reason: z.string().nullable(), model });
+
+export const usagePoint = z.object({
+  t: z.number(),
+  cpu_m: z.number(),
+  cpu_m_max: z.number(),
+  memory_bytes: z.number(),
+  memory_bytes_max: z.number(),
+});
+export type UsagePoint = z.infer<typeof usagePoint>;
+
+export const modelMetrics = z.object({
+  range: z.string(),
+  step_seconds: z.number(),
+  limits: z.object({ cpu_m: z.number().nullable(), memory_bytes: z.number().nullable() }),
+  latest: z.object({ t: z.number(), cpu_m: z.number(), memory_bytes: z.number() }).nullable(),
+  points: z.array(usagePoint),
+});
+export type ModelMetrics = z.infer<typeof modelMetrics>;
+
+export const keyUsage = z.object({
+  key: z.string(),
+  last_used: z.number().nullable(),
+  days: z.array(z.object({ day: z.string(), models: z.record(z.string(), z.object({ requests: z.number(), errors: z.number(), limited: z.number() })) })),
+});
+export type KeyUsage = z.infer<typeof keyUsage>;
