@@ -48,6 +48,7 @@ class Settings(BaseSettings):
     reconcile_interval: float = 60
     queue_poll_interval: float = 5
     reaper_interval: float = 30
+    telemetry_interval: float = 5  # seconds between resource-use measurements; 0 turns telemetry off
     run_background: bool = True
     default_idle_timeout: int = 900
     api_cpu_m: int = 100

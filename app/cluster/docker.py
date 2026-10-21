@@ -5,7 +5,7 @@ import docker
 import docker.errors
 from docker.types import DeviceRequest
 
-from app.cluster.backend import BackendError, ModelSpec, RuntimeStatus
+from app.cluster.backend import BackendError, ModelSpec, RuntimeStatus, Usage
 from app.config import Settings
 from app.deployer.images import ImageInfo
 
@@ -53,6 +53,17 @@ class DockerBackend:
 
     async def list_models(self) -> list[str]:
         return await self._run(self._list)
+
+    async def usage(self, name: str) -> Usage | None:
+        containers = await self._run(self._running_containers, name)
+        if not containers:
+            return None
+        # `docker stats` takes about a second per container, so measure them side by side
+        samples = await asyncio.gather(*(self._run(self._container_usage, c) for c in containers))
+        samples = [s for s in samples if s is not None]
+        if not samples:
+            return None
+        return Usage(cpu_m=sum(c for c, _ in samples), memory_bytes=sum(m for _, m in samples))
 
     @staticmethod
     async def _run(fn, *args):
@@ -234,6 +245,28 @@ class DockerBackend:
                 return f"http://127.0.0.1:{bindings[0]['HostPort']}"
         suffix = "-api" if self._get(f"{_base(name)}-api") is not None else ""
         return f"http://{_base(name)}{suffix}:8000"
+
+    def _running_containers(self, name: str) -> list:
+        return self.client.containers.list(filters={"label": [f"mlapi.model={name}", "mlapi.managed=true"]})
+
+    @staticmethod
+    def _container_usage(container) -> tuple[float, int] | None:
+        """(millicores, working-set bytes) from one stats reading, the way `docker stats` computes them."""
+        try:
+            stats = container.stats(stream=False)
+        except docker.errors.NotFound:  # stopped between listing and reading
+            return None
+        if not (stats.get("memory_stats") or {}).get("usage"):  # Docker answers a container that has just stopped with an all-zero record
+            return None
+        cpu, before = stats.get("cpu_stats") or {}, stats.get("precpu_stats") or {}
+        cpu_delta = (cpu.get("cpu_usage") or {}).get("total_usage", 0) - (before.get("cpu_usage") or {}).get("total_usage", 0)
+        system_delta = (cpu.get("system_cpu_usage") or 0) - (before.get("system_cpu_usage") or 0)
+        cpus = cpu.get("online_cpus") or len((cpu.get("cpu_usage") or {}).get("percpu_usage") or []) or 1
+        millicores = cpu_delta / system_delta * cpus * 1000 if system_delta > 0 and cpu_delta > 0 else 0.0
+        memory = stats.get("memory_stats") or {}
+        counters = memory.get("stats") or {}
+        cache = counters.get("inactive_file", counters.get("total_inactive_file", 0))  # cgroup v2 / v1
+        return millicores, max(0, int(memory.get("usage", 0)) - int(cache))
 
     def _list(self) -> list[str]:
         containers = self.client.containers.list(all=True, filters={"label": ["mlapi.managed=true"]})

@@ -131,6 +131,32 @@ async def get_model_detail(
     return out
 
 
+@models_router.get("/{name}/metrics")
+async def get_model_metrics(
+    name: str,
+    range: str = "1h",
+    session: AsyncSession = Depends(get_session),
+):
+    """Resource use over time: 1h at 5 s, 24h at 1 min, 30d at 1 h, 1y at 1 day. Gaps mean nothing was running."""
+    import time
+
+    from app.telemetry import store
+    from app.telemetry.tiers import BY_NAME, RANGES
+
+    model = await _model_or_404(session, name)
+    if range not in RANGES:
+        raise HTTPException(status_code=422, detail=f"range must be one of {', '.join(RANGES)}")
+    limits = model.approved_resources or {}
+    now = time.time()
+    return {
+        "range": range,
+        "step_seconds": BY_NAME[RANGES[range]].step,
+        "limits": {"cpu_m": limits.get("cpu_m"), "memory_bytes": limits.get("memory_bytes")},
+        "latest": await store.latest(session, name, now),
+        "points": await store.series(session, name, range, now=now),
+    }
+
+
 @models_router.patch("/{name}/config")
 async def patch_config(
     name: str,

@@ -13,6 +13,7 @@ from app.registry.errors import Conflict, Invalid
 from app.registry.queries import add_deployment, get_model
 from app.registry.resources import Resources
 from app.registry.tables import Deployment, Model
+from app.telemetry import store as telemetry_store
 
 logger = logging.getLogger(__name__)
 
@@ -513,6 +514,7 @@ class Deployer:
         await delete_schema(self._redis, model.name)
         if self._queue_access is not None and model.mode == "queue":
             await self._queue_access.remove(model.name)
+        await telemetry_store.delete_model(session, model.name)
         digest = model.current_digest
         model.state, model.state_detail = states.REMOVED, None
         model.current_digest = model.previous_digest = model.pending_digest = None

@@ -15,6 +15,7 @@ class FakeContainer:
         self.restart_count = 0
         self.restarting = False
         self.exit_code = 0
+        self.stats_result: dict | None = None  # what stats() returns; None = the container is gone
 
     @property
     def attrs(self):
@@ -37,6 +38,11 @@ class FakeContainer:
 
     def reload(self):
         pass
+
+    def stats(self, stream=False):
+        if self.stats_result is None:
+            raise docker.errors.NotFound("no such container")
+        return self.stats_result
 
 
 class _Containers:

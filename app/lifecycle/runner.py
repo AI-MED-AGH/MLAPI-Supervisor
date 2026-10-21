@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 class Background:
     """Owns the long-running supervisor loops (reaper, wake consumer, queue scaler, reconciler, poller)."""
 
-    def __init__(self, *, reaper, scaler, reconciler, wake, poller, settings):
+    def __init__(self, *, reaper, scaler, reconciler, wake, poller, settings, collector=None):
         self._tasks: list[asyncio.Task] = []
         self._loops = [
             ("idle-reaper", reaper.tick, settings.reaper_interval),
@@ -16,6 +16,9 @@ class Background:
         ]
         if poller is not None:
             self._loops.append(("ghcr-poller", poller.tick, settings.poll_interval))
+        if collector is not None and settings.telemetry_interval > 0:
+            self._loops.append(("usage-collector", collector.tick, settings.telemetry_interval))
+        self._fixed_rate = {"usage-collector"}  # measurements are only comparable when evenly spaced
         self._wake = wake
         self._poller = poller
 
@@ -28,6 +31,19 @@ class Background:
             except Exception:
                 logger.exception("Background loop %s failed; continuing", name)
             await asyncio.sleep(interval)
+
+    async def _fixed_rate_loop(self, name: str, tick, interval: float) -> None:
+        """Like _periodic, but the interval is start-to-start, so a slow tick does not stretch the period."""
+        loop = asyncio.get_running_loop()
+        while True:
+            started = loop.time()
+            try:
+                await tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Background loop %s failed; continuing", name)
+            await asyncio.sleep(max(0.0, interval - (loop.time() - started)))
 
     async def _wake_loop(self) -> None:
         while True:
@@ -42,7 +58,8 @@ class Background:
     def start(self) -> None:
         loop = asyncio.get_running_loop()
         for name, tick, interval in self._loops:
-            self._tasks.append(loop.create_task(self._periodic(name, tick, interval), name=name))
+            run = self._fixed_rate_loop if name in self._fixed_rate else self._periodic
+            self._tasks.append(loop.create_task(run(name, tick, interval), name=name))
         self._tasks.append(loop.create_task(self._wake_loop(), name="wake-consumer"))
 
     async def stop(self) -> None:
@@ -60,6 +77,7 @@ def build_background(services, state) -> "Background":
     from app.lifecycle.reaper import IdleReaper
     from app.lifecycle.reconciler import Reconciler
     from app.lifecycle.wake import WakeConsumer
+    from app.telemetry.collector import UsageCollector
 
     sm, deployer, redis, settings = state.sessionmaker, services.deployer, state.redis, state.settings
     poller = None
@@ -76,4 +94,5 @@ def build_background(services, state) -> "Background":
         wake=WakeConsumer(sessionmaker=sm, deployer=deployer, redis=redis),
         poller=poller,
         settings=settings,
+        collector=UsageCollector(sessionmaker=sm, backend=services.backend),
     )

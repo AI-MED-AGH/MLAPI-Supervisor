@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from app.cluster.backend import BackendError, ModelSpec, RuntimeStatus
+from app.cluster.backend import BackendError, ModelSpec, RuntimeStatus, Usage
 
 
 @dataclass
@@ -21,6 +21,8 @@ class FakeBackend:
         self.never_ready: set[str] = set()  # image refs whose workloads never become ready
         self.models: dict[str, _Entry] = {}
         self.calls: list[tuple] = []
+        self.usage_by_model: dict[str, Usage | None] = {}  # what usage() reports; unset = nothing running
+        self.usage_error: Exception | None = None
 
     async def apply_model(self, spec: ModelSpec) -> None:
         self.calls.append(("apply_model", spec.name, spec.image))
@@ -82,3 +84,8 @@ class FakeBackend:
 
     async def list_models(self) -> list[str]:
         return sorted(self.models)
+
+    async def usage(self, name: str) -> Usage | None:
+        if self.usage_error is not None:
+            raise self.usage_error
+        return self.usage_by_model.get(name)

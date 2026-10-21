@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.db import Base
 import app.keys.tables  # noqa: F401
+import app.telemetry.tables  # noqa: F401
 import app.watchman.tables  # noqa: F401
 
 try:  # later tasks add more table modules

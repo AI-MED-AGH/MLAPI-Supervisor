@@ -2,6 +2,7 @@ import sqlalchemy as sa
 
 from app.db import Base
 import app.keys.tables  # noqa: F401
+import app.telemetry.tables  # noqa: F401
 import app.watchman.tables  # noqa: F401
 
 try:

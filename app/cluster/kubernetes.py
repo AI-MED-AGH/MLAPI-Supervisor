@@ -2,7 +2,7 @@ import logging
 from dataclasses import dataclass
 
 from app.cluster import k8s_manifests as m
-from app.cluster.backend import BackendError, ModelSpec, RuntimeStatus
+from app.cluster.backend import BackendError, ModelSpec, RuntimeStatus, Usage
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -14,6 +14,7 @@ class K8sApi:
     core: object
     net: object
     close: object = None
+    custom: object = None  # CustomObjectsApi: reads metrics.k8s.io (needs metrics-server in the cluster)
 
 
 async def connect(settings: Settings) -> K8sApi:
@@ -33,7 +34,21 @@ async def connect(settings: Settings) -> K8sApi:
         core=client.CoreV1Api(api_client),
         net=client.NetworkingV1Api(api_client),
         close=api_client.close,
+        custom=client.CustomObjectsApi(api_client),
     )
+
+
+_CPU_UNITS = {"n": 1e-6, "u": 1e-3, "m": 1.0, "": 1000.0}
+_MEMORY_UNITS = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4, "k": 1000, "M": 1000**2, "G": 1000**3, "": 1}
+
+
+def _quantity(raw: str, units: dict[str, float]) -> float:
+    """'250m' / '12345n' / '1' (cpu, -> millicores) and '123Ki' / '1G' / '1048576' (memory, -> bytes)."""
+    text = str(raw)
+    for suffix in sorted(units, key=len, reverse=True):
+        if suffix and text.endswith(suffix):
+            return float(text[: -len(suffix)]) * units[suffix]
+    return float(text) * units[""]
 
 
 def _is(exc: Exception, status: int) -> bool:
@@ -47,6 +62,7 @@ class KubernetesBackend:
         self._s = settings
         self._ns = settings.k8s_namespace
         self._api = api
+        self._warned_metrics = False
 
     async def _get_api(self) -> K8sApi:
         if self._api is None:
@@ -224,6 +240,29 @@ class KubernetesBackend:
 
     async def endpoint(self, name: str) -> str:
         return f"http://{m.names(name)['service']}.{self._ns}.svc:8000"
+
+    async def usage(self, name: str) -> Usage | None:
+        api = await self._get_api()
+        if api.custom is None:
+            return None
+        try:
+            metrics = await api.custom.list_namespaced_custom_object(
+                "metrics.k8s.io", "v1beta1", self._ns, "pods", label_selector=f"mlapi/model={name}"
+            )
+        except Exception as exc:
+            if _is(exc, 404):  # metrics-server is not installed
+                if not self._warned_metrics:
+                    logger.warning("metrics.k8s.io is not available; install metrics-server to see model resource use")
+                    self._warned_metrics = True
+                return None
+            raise BackendError(f"kubernetes error: {exc}") from exc
+        containers = [c for pod in metrics.get("items", []) for c in pod.get("containers", [])]
+        if not containers:
+            return None
+        return Usage(
+            cpu_m=sum(_quantity(c["usage"]["cpu"], _CPU_UNITS) for c in containers),
+            memory_bytes=int(sum(_quantity(c["usage"]["memory"], _MEMORY_UNITS) for c in containers)),
+        )
 
     async def list_models(self) -> list[str]:
         api = await self._get_api()

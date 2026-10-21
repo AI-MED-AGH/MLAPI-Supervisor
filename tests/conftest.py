@@ -43,6 +43,7 @@ async def db_engine(tmp_path):
     from app.db import Base
     import app.keys.tables  # noqa: F401  (register tables)
     import app.registry.tables  # noqa: F401
+    import app.telemetry.tables  # noqa: F401
     import app.watchman.tables  # noqa: F401
 
     engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'test.db'}", connect_args={"timeout": 30})

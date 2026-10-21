@@ -31,6 +31,14 @@ class RuntimeStatus:
     restarts: int = 0
 
 
+@dataclass(frozen=True)
+class Usage:
+    """What a model is using right now, summed over its running containers (API and worker in queue mode)."""
+
+    cpu_m: float  # millicores
+    memory_bytes: int  # working set (page cache excluded)
+
+
 class ClusterBackend(Protocol):
     async def apply_model(self, spec: ModelSpec) -> None: ...
 
@@ -46,3 +54,6 @@ class ClusterBackend(Protocol):
 
     async def list_models(self) -> list[str]:
         """Names of models this backend currently manages."""
+
+    async def usage(self, name: str) -> Usage | None:
+        """Current CPU and memory use, or None when nothing of the model is running or the backend cannot measure."""
