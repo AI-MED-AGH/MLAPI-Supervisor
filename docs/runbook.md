@@ -7,10 +7,16 @@ Needs Docker with the Compose plugin. Clone `ML-API` and `MLAPI-Supervisor` side
 ```shell
 cd MLAPI-Supervisor
 cp .env.example .env
-docker compose run --rm --no-deps supervisor python -m app.admin_key    # prints a key and its hash
 ```
 
-Put the hash in `.env` as `ADMIN_API_KEYS`, set a long random `REDIS_PASSWORD`, then:
+Set long random `REDIS_PASSWORD` and `QUEUE_REDIS_PASSWORD` in `.env`, then generate an admin key (Compose insists that
+`ADMIN_API_KEYS` has a value even for this command, so give it a throwaway one in the shell):
+
+```shell
+ADMIN_API_KEYS=x docker compose run --rm --no-deps supervisor python -m app.admin_key    # prints a key and its hash
+```
+
+Put the hash in `.env` as `ADMIN_API_KEYS`, then:
 
 ```shell
 docker compose up -d --build
@@ -18,13 +24,14 @@ curl localhost:8001/health          # Supervisor (admin API, localhost only)
 curl localhost:8000/health          # Router (what clients use)
 ```
 
-Open `http://localhost:8001/docs` for the admin API. Both ports are bound to `127.0.0.1` by default; set
+Open `http://localhost:8001/admin` for the admin UI. The API description (`/docs`) is off unless `ENABLE_DOCS=true`. Both ports are bound to `127.0.0.1` by default; set
 `ROUTER_BIND=0.0.0.0` to let other machines call the Router (put TLS in front of it), and **never** publish the
 Supervisor port.
 
 **Security note.** The Supervisor mounts the Docker socket, which is root-equivalent on the host. Run this stack only on
 a device you trust. Model containers run with all capabilities dropped, `no-new-privileges`, CPU/memory limits and no
-published ports, but on Docker they share one network and can reach each other (Kubernetes NetworkPolicies prevent this).
+published ports. With the provided `docker-compose.yml` each model gets a network of its own (`DOCKER_ISOLATE_MODELS`), so models
+cannot reach each other or the Redis holding routes and keys; Kubernetes NetworkPolicies do the same there.
 
 ## 2. Day-to-day
 
@@ -142,7 +149,9 @@ their own usage (`gpu_memory_fraction` in `fastmlapi`). A model that needs a GPU
   Kubernetes), never the one holding routes and API keys, whatever the mode: Redis cannot cap memory per user, so one model
   filling its keys must only ever be able to exhaust the queue Redis (which has a memory cap and refuses writes when full). The
   Supervisor will not create a model's Redis user without it.
-* **Docker installs:** model containers can reach each other, and the Supervisor holds the Docker socket (root on the host).
+* **Docker installs:** the Supervisor holds the Docker socket (root on the host). Models are isolated from each other only when
+  `DOCKER_ISOLATE_MODELS=true` (the provided compose file sets it); that setup was tested against a fake Docker client, so check
+  `docker network ls` after the first deploy. Models can still reach the internet.
 * **GPU memory is shared**, not isolated.
 * **Disk limits are not enforced on Docker** (they are sized into the cache volume on Kubernetes).
 * A worker that publishes no liveness record (older fastmlapi) is trusted after 10 s of its container running; current versions

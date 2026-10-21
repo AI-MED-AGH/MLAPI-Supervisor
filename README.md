@@ -25,6 +25,9 @@ docker compose up -d --build          # Router + Supervisor + Redis; the Router 
 
 **On a server** with Kubernetes (k3s): see `deploy/k8s/` and the [runbook](docs/runbook.md).
 
+Po polsku: [instalacja dla administratora](docs/pl/instalacja-admin.md) i
+[przewodnik dla autorów modeli](docs/pl/przewodnik-autor-modelu.md) (jak przygotować obraz dla pollera GHCR i poprosić o zasoby).
+
 ## The idea in four steps
 
 1. A model author builds an image with [`fastmlapi`](https://github.com/AI-MED-AGH/fast-ML-Api) and labels it
