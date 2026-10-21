@@ -14,6 +14,7 @@ class ApiKey(Base):
     allow_all: Mapped[bool] = mapped_column(default=False)
     expires_at: Mapped[int | None] = mapped_column(BigInteger, default=None)  # unix seconds
     revoked_at: Mapped[int | None] = mapped_column(BigInteger, default=None)  # unix seconds
+    limits: Mapped[dict] = mapped_column(JSON, default=dict)  # see app.limits.KEY_LIMIT_FIELDS
     created_at: Mapped[int] = mapped_column(BigInteger)
 
     def __repr__(self) -> str:

@@ -27,6 +27,7 @@ class Model(Base):
     failed_digest: Mapped[str | None] = mapped_column(default=None)  # not retried until a new digest appears
     approved_resources: Mapped[dict | None] = mapped_column(JSON, default=None)
     requested_resources: Mapped[dict | None] = mapped_column(JSON, default=None)
+    declared_limits: Mapped[dict | None] = mapped_column(JSON, default=None)  # from the image labels (mlapi.rate.*)
     config: Mapped[dict] = mapped_column(JSON, default=dict)  # env, secret_refs, idle_timeout_s, max_job_seconds
     created_at: Mapped[int] = mapped_column(BigInteger, default=_now)
     updated_at: Mapped[int] = mapped_column(BigInteger, default=_now, onupdate=_now)

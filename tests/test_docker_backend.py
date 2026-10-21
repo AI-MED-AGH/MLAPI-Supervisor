@@ -58,6 +58,11 @@ async def test_container_is_hardened(backend, docker_client):
     assert not k.get("privileged")
 
 
+async def test_models_are_told_not_to_return_exception_text_and_cannot_turn_that_back_on(backend, docker_client):
+    await backend.apply_model(spec(env={"FASTMLAPI_EXPOSE_ERRORS": "true"}))
+    assert next(iter(docker_client.container_map.values())).kwargs["environment"]["FASTMLAPI_EXPOSE_ERRORS"] == "false"
+
+
 async def test_platform_env_cannot_be_overridden_by_model_env(backend, docker_client):
     await backend.apply_model(spec(env={"FASTMLAPI_ROLE": "worker", "HF_HOME": "/evil"}))
     env = docker_client.container_map["mlapi-m-ecg"].kwargs["environment"]

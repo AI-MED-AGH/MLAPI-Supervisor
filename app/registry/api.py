@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,7 +29,7 @@ models_router = APIRouter(prefix="/v1/models", tags=["models"], dependencies=[De
 approvals_router = APIRouter(prefix="/v1/approvals", tags=["approvals"], dependencies=[Depends(require_admin)])
 
 
-def model_out(model: Model) -> dict:
+def model_out(model: Model, deployer) -> dict:
     return {
         "name": model.name,
         "image": model.image,
@@ -44,6 +44,8 @@ def model_out(model: Model) -> dict:
         "approved_resources": model.approved_resources,
         "requested_resources": model.requested_resources,
         "config": model.config or {},
+        "declared_limits": model.declared_limits or {},
+        "limits": deployer.limits_of(model),
         "created_at": model.created_at,
         "updated_at": model.updated_at,
         "last_checked_at": model.last_checked_at,
@@ -88,12 +90,12 @@ async def register_model(
     await session.commit()
     if submission.action == "deploy":
         svc.deployer.spawn(model.id, submission.digest)
-    return {"action": submission.action, "model": model_out(model)}
+    return {"action": submission.action, "model": model_out(model, svc.deployer)}
 
 
 @models_router.get("")
-async def get_models(session: AsyncSession = Depends(get_session)):
-    return [model_out(m) for m in await list_models(session)]
+async def get_models(session: AsyncSession = Depends(get_session), svc: Services = Depends(get_services)):
+    return [model_out(m, svc.deployer) for m in await list_models(session)]
 
 
 @models_router.get("/{name}")
@@ -106,7 +108,7 @@ async def get_model_detail(
     import json
 
     model = await _model_or_404(session, name)
-    out = model_out(model)
+    out = model_out(model, svc.deployer)
     out["deployments"] = [
         {
             "digest": d.digest, "status": d.status, "reason": d.reason,
@@ -170,7 +172,7 @@ async def patch_config(
     await session.commit()
     if redeploy:
         svc.deployer.spawn(model.id, digest)
-    return {"redeploy": redeploy, "model": model_out(model)}
+    return {"redeploy": redeploy, "model": model_out(model, svc.deployer)}
 
 
 @models_router.post("/{name}/redeploy", status_code=status.HTTP_202_ACCEPTED)
@@ -179,7 +181,7 @@ async def redeploy(name: str, session: AsyncSession = Depends(get_session), svc:
     digest = await svc.deployer.redeploy(session, model)
     await session.commit()
     svc.deployer.spawn(model.id, digest)
-    return model_out(model)
+    return model_out(model, svc.deployer)
 
 
 @models_router.post("/{name}/rollback", status_code=status.HTTP_202_ACCEPTED)
@@ -188,7 +190,7 @@ async def rollback(name: str, session: AsyncSession = Depends(get_session), svc:
     digest = await svc.deployer.rollback(session, model)
     await session.commit()
     svc.deployer.spawn(model.id, digest)
-    return model_out(model)
+    return model_out(model, svc.deployer)
 
 
 @models_router.post("/{name}/sleep")
@@ -196,7 +198,7 @@ async def sleep(name: str, session: AsyncSession = Depends(get_session), svc: Se
     model = await _model_or_404(session, name)
     await svc.deployer.sleep(session, model)
     await session.commit()
-    return model_out(model)
+    return model_out(model, svc.deployer)
 
 
 @models_router.post("/{name}/wake", status_code=status.HTTP_202_ACCEPTED)
@@ -205,7 +207,7 @@ async def wake(name: str, session: AsyncSession = Depends(get_session), svc: Ser
     await svc.deployer.begin_wake(session, model)
     await session.commit()
     svc.deployer.spawn_wake(model.id)
-    return model_out(model)
+    return model_out(model, svc.deployer)
 
 
 @models_router.delete("/{name}", status_code=status.HTTP_200_OK)
@@ -218,7 +220,7 @@ async def delete_model(
     model = await _model_or_404(session, name)
     await svc.deployer.remove(session, model, keep_cache=keep_cache)
     await session.commit()
-    return model_out(model)
+    return model_out(model, svc.deployer)
 
 
 # ───────────── approvals ─────────────
@@ -260,6 +262,7 @@ async def list_approvals(status_filter: str = states.REQ_PENDING, session: Async
 @approvals_router.post("/{request_id}/approve")
 async def approve(
     request_id: int,
+    http: Request,
     body: ApproveBody | None = None,
     session: AsyncSession = Depends(get_session),
     svc: Services = Depends(get_services),
@@ -285,20 +288,25 @@ async def approve(
             )
         except ResourceError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc))
-    model, digest = await svc.registry.approve(session, request_id, override=override)
+    model, digest = await svc.registry.approve(
+        session, request_id, override=override, admin=getattr(http.state, "admin", "admin")
+    )
     await svc.deployer.begin(session, model, digest)
     await session.commit()
     svc.deployer.spawn(model.id, digest)
-    return {"deploy_started": True, "reason": None, "model": model_out(model)}
+    return {"deploy_started": True, "reason": None, "model": model_out(model, svc.deployer)}
 
 
 @approvals_router.post("/{request_id}/reject")
 async def reject(
     request_id: int,
+    http: Request,
     body: RejectBody | None = None,
     session: AsyncSession = Depends(get_session),
     svc: Services = Depends(get_services),
 ):
-    model = await svc.registry.reject(session, request_id, note=(body.note if body else None))
+    model = await svc.registry.reject(
+        session, request_id, note=(body.note if body else None), admin=getattr(http.state, "admin", "admin")
+    )
     await session.commit()
-    return model_out(model)
+    return model_out(model, svc.deployer)

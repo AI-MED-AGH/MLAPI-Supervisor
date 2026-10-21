@@ -50,6 +50,20 @@ def test_model_env_cannot_override_platform_variables():
     assert env["FASTMLAPI_ROLE"] == "sync" and env["HF_HOME"] == "/cache/hf"
 
 
+def test_models_are_told_not_to_return_exception_text_and_cannot_turn_that_back_on():
+    for role in ("main",):
+        env = {e["name"]: e["value"] for e in container(m.deployment(spec(env={"FASTMLAPI_EXPOSE_ERRORS": "true"}), role, S, 1))["env"]}
+        assert env["FASTMLAPI_EXPOSE_ERRORS"] == "false"
+
+
+def test_queue_models_are_told_their_pending_cap():
+    queue = spec(mode="queue", queue_url="redis://m_ecg:pw@redis:6379/0", max_pending=250)
+    env = {e["name"]: e["value"] for e in container(m.deployment(queue, "main", S, 1))["env"]}
+    assert env["FASTMLAPI_MAX_PENDING"] == "250"
+    env = {e["name"]: e["value"] for e in container(m.deployment(spec(env={"FASTMLAPI_MAX_PENDING": "9999999"}), "main", S, 1))["env"]}
+    assert "FASTMLAPI_MAX_PENDING" not in env  # a model cannot set its own cap, and sync models have none
+
+
 def test_gpu_limit_only_when_approved_and_pull_secret_only_for_ghcr():
     assert "nvidia.com/gpu" not in container(m.deployment(spec(), "main", S, 1))["resources"]["limits"]
     gpu_dep = m.deployment(spec(resources=GPU), "main", S, 1)

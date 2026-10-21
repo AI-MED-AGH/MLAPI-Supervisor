@@ -1,0 +1,53 @@
+# Public entry point. EDIT before applying: the host, the TLS secret and (if you do not use ingress-nginx) the annotations.
+# The limits below are per client address and are the first line of defence; the Router's per-key limits are the second.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mlapi-router
+  namespace: mlapi-system
+  annotations:
+    nginx.ingress.kubernetes.io/limit-rps: "20"
+    nginx.ingress.kubernetes.io/limit-burst-multiplier: "3"
+    nginx.ingress.kubernetes.io/limit-connections: "40"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"      # the Router's MAX_BODY_BYTES; refuse bigger bodies at the edge
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "75"    # a little over the Router's 60 s model timeout
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "75"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [models.example.com]
+      secretName: mlapi-router-tls
+  rules:
+    - host: models.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: mlapi-router, port: {number: 80}}
+---
+# Keep at least one Router up while nodes are drained for upgrades.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mlapi-router
+  namespace: mlapi-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: {app: mlapi-router}
+---
+# Needs metrics-server. More Routers also means a larger share of the per-model concurrency allowance, which is per Router.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mlapi-router
+  namespace: mlapi-system
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: mlapi-router}
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}

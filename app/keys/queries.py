@@ -15,6 +15,7 @@ async def create_key(
     allowed_models: list[str],
     allow_all: bool,
     expires_at: int | None,
+    limits: dict | None = None,
 ) -> tuple[ApiKey, str]:
     key_id, secret, raw = generate_key()
     key = ApiKey(
@@ -24,6 +25,7 @@ async def create_key(
         allowed_models=list(allowed_models),
         allow_all=allow_all,
         expires_at=expires_at,
+        limits=dict(limits or {}),
         created_at=int(time.time()),
     )
     session.add(key)

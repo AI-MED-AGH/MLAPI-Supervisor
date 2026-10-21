@@ -21,7 +21,14 @@ async def test_record_matches_router_contract(session):
         "allow_all": False,
         "expires_at": 2_000_000_000,
         "name": "k",
+        "limits": {},
     }
+
+
+async def test_record_carries_the_keys_limits(session):
+    key, _ = await make(session)
+    key.limits = {"rpm": 10, "max_outstanding_jobs": 0}
+    assert key_record(key)["limits"] == {"rpm": 10, "max_outstanding_jobs": 0}
 
 
 async def test_publish_writes_json_without_plaintext(session, redis):

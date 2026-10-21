@@ -3,6 +3,7 @@ import logging
 import re
 import time
 
+from app.limits import MODEL_LIMIT_FIELDS, effective_model_limits, route_limits, validate_limits
 from app.cluster.backend import BackendError, ClusterBackend, ModelSpec
 from app.config import Settings
 from app.events import EventBus
@@ -10,7 +11,7 @@ from app.queue_access.acl import QueueAccessError
 from app.redis_sync.routes import delete_route, delete_schema, publish_route, publish_schema
 from app.registry import states
 from app.registry.errors import Conflict, Invalid
-from app.registry.queries import add_deployment, get_model
+from app.registry.queries import add_deployment, get_model, get_model_by_name
 from app.registry.resources import Resources
 from app.registry.tables import Deployment, Model
 from app.telemetry import store as telemetry_store
@@ -23,7 +24,7 @@ _NAME_RE = re.compile(r"[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
 _RESERVED_ENV_PREFIXES = ("FASTMLAPI_", "MLAPI_", "NVIDIA_", "CUDA_")
 # secrets a model must never be able to mount: the platform's own (image pull, Redis, environment) and cluster internals
 _RESERVED_SECRET_PREFIXES = ("ghcr-", "mlapi-", "kube", "default-token")
-CONFIG_FIELDS = ("env", "secret_refs", "idle_timeout_s", "max_job_seconds")
+CONFIG_FIELDS = ("env", "secret_refs", "idle_timeout_s", "max_job_seconds", "limits")
 
 
 class DeployFailed(Exception):
@@ -61,6 +62,11 @@ def validate_config(patch: dict) -> dict:
             if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 86400:
                 raise Invalid("max_job_seconds must be an integer between 1 and 86400")
             clean[field] = value
+        elif field == "limits":
+            try:
+                clean[field] = validate_limits(value, MODEL_LIMIT_FIELDS)
+            except ValueError as exc:
+                raise Invalid(str(exc)) from exc
         else:
             raise Invalid(f"unknown config field: {field!r}")
     return clean
@@ -146,8 +152,21 @@ class Deployer:
                 setattr(model, name, value)
             await session.commit()
 
+    @property
+    def settings(self) -> Settings:
+        return self._settings
+
+    def limits_of(self, model: Model) -> dict:
+        """Everything that limits this model: the admin's values, else the image's (clamped), else the defaults."""
+        return effective_model_limits(
+            declared=model.declared_limits, admin=(model.config or {}).get("limits"), mode=model.mode, settings=self._settings
+        )
+
     async def _set_route(self, name: str, state: str, mode: str) -> None:
-        await publish_route(self._redis, name, url=await self._backend.endpoint(name), state=state, mode=mode)
+        async with self._sm() as session:
+            model = await get_model_by_name(session, name)
+            limits = route_limits(self.limits_of(model)) if model is not None else {}
+        await publish_route(self._redis, name, url=await self._backend.endpoint(name), state=state, mode=mode, limits=limits)
 
     async def _spec(self, model: Model, digest: str) -> ModelSpec:
         approved = Resources.from_dict(model.approved_resources)
@@ -170,6 +189,7 @@ class Deployer:
             secret_refs=tuple(config.get("secret_refs", ())),
             queue_url=queue_url,
             max_job_seconds=int(config.get("max_job_seconds", 600)),
+            max_pending=self.limits_of(model).get("max_pending") if model.mode == "queue" else None,
             api_resources=Resources(
                 cpu_m=self._settings.api_cpu_m,
                 memory_bytes=self._settings.api_memory_bytes,
@@ -527,13 +547,32 @@ class Deployer:
         needs_redeploy = any(
             clean[k] != (model.config or {}).get(k) for k in ("env", "secret_refs") if k in clean
         )
+        pending_before = self.limits_of(model).get("max_pending")
         model.config = {**(model.config or {}), **clean}
+        pending_changed = False
+        if "limits" in clean:
+            # the model container is told its queue cap at start; every other limit lives in the route, which can change now
+            pending_changed = self.limits_of(model).get("max_pending") != pending_before
+            needs_redeploy = needs_redeploy or pending_changed
+            await self._republish_route(model)
         if not needs_redeploy:
             await session.flush()
             return False
-        if model.state == states.READY:
+        # A sleeping queue model has its API up (only the worker is off), so a new queue cap can be applied right away.
+        if model.state == states.READY or (pending_changed and model.state == states.SLEEPING and model.mode == "queue"):
             await self.redeploy(session, model, clear_failed=False)
             return True
         model.state_detail = "config changes apply on the next deploy"
         await session.flush()
         return False
+
+    async def _republish_route(self, model: Model) -> None:
+        from app.lifecycle.reconciler import desired_route_state
+
+        wanted = desired_route_state(model.state, model.mode)
+        if wanted is None or not model.current_digest:
+            return  # no route yet: the deploy that creates it will carry the limits
+        await publish_route(
+            self._redis, model.name, url=await self._backend.endpoint(model.name), state=wanted, mode=model.mode,
+            limits=route_limits(self.limits_of(model)),
+        )

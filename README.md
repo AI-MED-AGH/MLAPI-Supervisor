@@ -54,10 +54,26 @@ Open `http://127.0.0.1:8001/admin` and sign in with an admin key (the same keys 
 |---|---|
 | Models | `POST /models` · `GET /models` · `GET /models/{name}` · `PATCH /models/{name}/config` · `POST /models/{name}/redeploy\|rollback\|sleep\|wake` · `DELETE /models/{name}` |
 | Approvals | `GET /approvals` · `POST /approvals/{id}/approve\|reject` |
-| Client keys | `POST /keys` (returns the key once) · `GET /keys` · `PATCH /keys/{id}` · `DELETE /keys/{id}` |
+| Client keys | `POST /keys` (returns the key once) · `GET /keys` · `PATCH /keys/{id}` · `DELETE /keys/{id}` · `GET /keys/{id}/usage?days=7` |
 | Webhooks | `POST /observers/` · `GET /observers/` · `DELETE /observers/{id}` |
 
-`GET /health` needs no key.
+`GET /health` needs no key. The API description (`/docs`, `/openapi.json`) is off unless `ENABLE_DOCS=true`.
+
+### Limits
+
+A key can carry `limits` (`rpm`, `poll_rpm`, `jobs_per_day`, `max_outstanding_jobs`; `0` = unlimited, absent = the Router's
+default). A model's limits come from its image labels, `mlapi.rate.rpm` (per key), `mlapi.rate.total_rpm` (all keys),
+`mlapi.rate.concurrency` and, for queue-mode models, `mlapi.queue.max_pending`, or from an admin:
+`PATCH /v1/models/{name}/config` with `{"limits": {"rpm_per_key": 30, "rpm_total": 300, "max_concurrency": 4, "max_pending": 500}}`.
+An admin's values win, and `{"limits": {}}` goes back to the image's. Values from labels are lowered to the ceilings below and
+cannot be unlimited, so a model author can protect their model but not lift the protection. Everything except `max_pending`
+takes effect immediately; a new `max_pending` redeploys the model, because the model enforces it. `GET /models/{name}` shows
+`declared_limits` (from the image) and `limits` (what applies).
+
+### Admin keys and the audit log
+
+`ADMIN_API_KEYS` entries may be named: `alice:<hash>,bob:<hash>`. Approvals record who decided, and every change made with an
+admin key, and every failed attempt, is logged on the `app.audit` logger without the key. A plain hash is called `admin`.
 
 Webhook events: `deploy.started`, `deploy.succeeded`, `deploy.failed`, `approval.requested`, `approval.approved`,
 `approval.rejected`, `model.sleeping`, `model.woke`, `model.waiting_for_gpu`, `model.removed`. Payload:
@@ -75,6 +91,11 @@ Environment variables (see `.env.example`). The ones that matter:
 | `DATABASE_URL` | Empty = SQLite file in `DATA_DIR`; set a Postgres URL (`postgresql+asyncpg://…`) for an external DB |
 | `QUEUE_ACL_SECRET` | Needed for queue-mode (long-running job) models: derives each model's Redis password |
 | `QUEUE_LEGACY_ACL` | `true` only for models built with an older fastmlapi (Lua scripts, `SCAN`): grants broader Redis permissions and requires a dedicated queue Redis |
+| `KEY_MAX_LIFETIME_SECONDS` | `0` (default) lets keys live forever. Otherwise every key, including `allow_all` ones, needs an expiry no further away than this |
+| `LIMIT_CEILING_RPM_PER_KEY`, `LIMIT_CEILING_RPM_TOTAL`, `LIMIT_CEILING_CONCURRENCY`, `LIMIT_CEILING_MAX_PENDING` | The most an image's own rate labels may ask for (600, 6000, 64, 10000). Admin values are not capped |
+| `DEFAULT_MAX_PENDING` | Queued jobs a queue-mode model accepts before answering 429 (1000) |
+| `DOCKER_ISOLATE_MODELS`, `DOCKER_PEERS` | Docker backend: give every model a network of its own so models cannot reach each other. `DOCKER_PEERS` names the containers (Router, Supervisor) attached to each of them; `docker-compose.yml` sets both |
+| `ENABLE_DOCS` | Serve `/docs` and `/openapi.json` (off by default) |
 | `GHCR_ORG`, `GHCR_TOKEN` | Optional: poll this organisation's container registry for model images |
 
 ## Development

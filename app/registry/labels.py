@@ -1,5 +1,5 @@
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.registry.resources import ResourceError, Resources, parse_cpu, parse_quantity
 
@@ -35,6 +35,15 @@ class ModelLabels:
     name: str
     mode: str
     resources: Resources
+    limits: dict = field(default_factory=dict)  # what the image asks for (see app.limits)
+
+
+_RATE_LABELS = {
+    "mlapi.rate.rpm": "rpm_per_key",
+    "mlapi.rate.total_rpm": "rpm_total",
+    "mlapi.rate.concurrency": "max_concurrency",
+    "mlapi.queue.max_pending": "max_pending",
+}
 
 
 def parse_labels(labels: dict[str, str] | None, package_name: str) -> ModelLabels:
@@ -62,4 +71,12 @@ def parse_labels(labels: dict[str, str] | None, package_name: str) -> ModelLabel
         )
     except ResourceError as exc:
         raise LabelError(str(exc)) from exc
-    return ModelLabels(name=name, mode=mode, resources=resources)
+    limits: dict[str, int] = {}
+    for label, field_name in _RATE_LABELS.items():
+        raw = labels.get(label)
+        if raw is None:
+            continue
+        if not re.fullmatch(r"[0-9]{1,9}", raw):
+            raise LabelError(f"{label} must be a whole number, got {raw!r}")
+        limits[field_name] = int(raw)
+    return ModelLabels(name=name, mode=mode, resources=resources, limits=limits)

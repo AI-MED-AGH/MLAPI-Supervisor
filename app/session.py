@@ -30,17 +30,25 @@ def issue(secret: str, key_hash: str, ttl: float, now: float | None = None) -> s
 
 
 def verify(secret: str, token: str, valid_hashes: set[str], now: float | None = None) -> bool:
+    return matching_hash(secret, token, valid_hashes, now) is not None
+
+
+def matching_hash(secret: str, token: str, valid_hashes: set[str], now: float | None = None) -> str | None:
+    """The admin-key hash that created this session, or None if the session is not valid."""
     try:
         encoded, signature = token.rsplit(".", 1)
         body = encoded.encode()
         if not hmac.compare_digest(signature, _sign(secret, body)):
-            return False
+            return None
         payload = json.loads(base64.urlsafe_b64decode(body))
         if payload["exp"] <= (now if now is not None else time.time()):
-            return False
-        return any(hmac.compare_digest(payload["fp"], fingerprint(h)) for h in valid_hashes)
+            return None
+        for h in valid_hashes:
+            if hmac.compare_digest(payload["fp"], fingerprint(h)):
+                return h
+        return None
     except (ValueError, KeyError, TypeError):
-        return False
+        return None
 
 
 class LoginLimiter:

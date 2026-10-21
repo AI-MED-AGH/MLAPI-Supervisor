@@ -2,6 +2,7 @@ import logging
 
 from app.keys.queries import list_keys
 from app.redis_sync.keys import drop_revoked, rebuild_keys
+from app.limits import effective_model_limits, route_limits
 from app.redis_sync.routes import delete_route, delete_schema, publish_route, publish_schema
 from app.registry import states
 from app.registry.errors import Conflict
@@ -23,13 +24,14 @@ def desired_route_state(state: str, mode: str) -> str | None:
 class Reconciler:
     """Makes the cluster and Redis match the database: heals drift, restores routes, removes orphans."""
 
-    def __init__(self, *, sessionmaker, deployer, redis, backend, probe, queue_access=None):
+    def __init__(self, *, sessionmaker, deployer, redis, backend, probe, queue_access=None, settings=None):
         self._sm = sessionmaker
         self._deployer = deployer
         self._redis = redis
         self._backend = backend
         self._probe = probe
         self._queue_access = queue_access
+        self._settings = settings or deployer.settings
 
     async def _active_names(self) -> set[str]:
         """Names of models that must keep their workload and route. Always read fresh: models appear mid-pass."""
@@ -90,7 +92,9 @@ class Reconciler:
         if wanted is None:
             return
         url = await self._backend.endpoint(model.name)
-        await publish_route(self._redis, model.name, url=url, state=wanted, mode=model.mode)
+        limits = route_limits(effective_model_limits(
+            declared=model.declared_limits, admin=(model.config or {}).get("limits"), mode=model.mode, settings=self._settings))
+        await publish_route(self._redis, model.name, url=url, state=wanted, mode=model.mode, limits=limits)
         if model.state == states.READY and not await self._redis.exists(f"schema:{model.name}"):
             schema = await self._probe.schema(url)
             if schema:

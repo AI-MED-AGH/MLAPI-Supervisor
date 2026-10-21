@@ -90,7 +90,7 @@ def build_background(services, state) -> "Background":
         scaler=QueueScaler(sessionmaker=sm, deployer=deployer, redis=services.queue_redis or redis, backend=services.backend,
                            settings=settings),
         reconciler=Reconciler(sessionmaker=sm, deployer=deployer, redis=redis, backend=services.backend, probe=services.probe,
-                              queue_access=services.queue_access),
+                              queue_access=services.queue_access, settings=settings),
         wake=WakeConsumer(sessionmaker=sm, deployer=deployer, redis=redis),
         poller=poller,
         settings=settings,

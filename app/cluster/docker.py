@@ -87,6 +87,46 @@ class DockerBackend:
         except docker.errors.NotFound:
             self.client.networks.create(self._network, driver="bridge", labels=MANAGED)
 
+    @staticmethod
+    def _model_network(name: str) -> str:
+        return f"mlapi-net-{name}"
+
+    @staticmethod
+    def _attach(network, container: str) -> bool:
+        """Connects a container to a network. False if it does not exist; already being connected is fine."""
+        try:
+            network.connect(container)
+        except docker.errors.NotFound:
+            return False
+        except docker.errors.APIError as exc:
+            if "already exists" not in str(exc).lower():
+                raise
+        return True
+
+    def _ensure_model_network(self, name: str) -> None:
+        """A network of the model's own, with the platform's containers (Router, Supervisor) attached, so they can reach
+        the model while other models cannot."""
+        network_name = self._model_network(name)
+        try:
+            network = self.client.networks.get(network_name)
+        except docker.errors.NotFound:
+            network = self.client.networks.create(network_name, driver="bridge", labels={**MANAGED, "mlapi.model": name})
+        for peer in self._settings.docker_peer_names:
+            if not self._attach(network, peer):
+                logger.warning("Container %r (DOCKER_PEERS) was not found; it cannot reach model %s", peer, name)
+
+    def _remove_model_network(self, name: str) -> None:
+        try:
+            network = self.client.networks.get(self._model_network(name))
+        except docker.errors.NotFound:
+            return
+        for peer in self._settings.docker_peer_names:
+            try:
+                network.disconnect(peer, force=True)
+            except docker.errors.DockerException:
+                pass
+        network.remove()
+
     def _ensure_volume(self, name: str, model: str) -> None:
         try:
             self.client.volumes.get(name)
@@ -112,6 +152,7 @@ class DockerBackend:
     def _create(self, spec: ModelSpec, *, container: str, role: str, fastmlapi_role: str, resources, gpu: bool, cache: bool):
         env = {k: v for k, v in spec.env.items() if not k.startswith(("NVIDIA_", "CUDA_"))}
         env["FASTMLAPI_ROLE"] = fastmlapi_role  # platform variables always win over model-supplied ones
+        env["FASTMLAPI_EXPOSE_ERRORS"] = "false"  # exception text can name files and data; callers see the kind of failure only
         if not gpu:
             env["NVIDIA_VISIBLE_DEVICES"] = "void"  # an image's default (=all) must not expose GPUs that were not approved
         if cache:
@@ -122,11 +163,13 @@ class DockerBackend:
             env.pop("FASTMLAPI_CACHE_DIR", None)
         if spec.queue_url:
             env["FASTMLAPI_QUEUE_URL"] = spec.queue_url
+        if spec.max_pending is not None:
+            env["FASTMLAPI_MAX_PENDING"] = str(spec.max_pending)
         kwargs = dict(
             name=container,
             environment=env,
             labels={**MANAGED, "mlapi.model": spec.name, "mlapi.role": role},
-            network=self._network,
+            network=self._model_network(spec.name) if self._settings.docker_isolate_models else self._network,
             nano_cpus=resources.cpu_m * 1_000_000,
             mem_limit=resources.memory_bytes,
             memswap_limit=resources.memory_bytes,  # no swap: a limit is a limit
@@ -144,7 +187,11 @@ class DockerBackend:
         if fastmlapi_role == "worker":
             # docker-py's create() has no stop_timeout: remember the grace period, and stop() passes it explicitly
             kwargs["labels"]["mlapi.max_job_seconds"] = str(spec.max_job_seconds)
-        return self.client.containers.create(spec.image, **kwargs)
+        container = self.client.containers.create(spec.image, **kwargs)
+        if self._settings.docker_isolate_models and spec.queue_url:
+            # queue-mode containers also reach the queue Redis, which lives on the shared network
+            self._attach(self.client.networks.get(self._network), container.name)
+        return container
 
     def _replace(self, container_name: str, grace_seconds: int = 10) -> bool:
         """Removes an existing container (stopping a running one gracefully first); returns whether it was running."""
@@ -166,6 +213,8 @@ class DockerBackend:
                 spec.resources.disk_bytes, spec.name,
             )
         self._ensure_network()
+        if self._settings.docker_isolate_models:
+            self._ensure_model_network(spec.name)
         self._ensure_image(spec.image)
         self._ensure_volume(f"{_base(spec.name)}-cache", spec.name)
         base = _base(spec.name)
@@ -208,6 +257,8 @@ class DockerBackend:
             existing = self._get(container)
             if existing is not None:
                 existing.remove(force=True)
+        if self._settings.docker_isolate_models:
+            self._remove_model_network(name)
         if not keep_cache:
             try:
                 self.client.volumes.get(f"{_base(name)}-cache").remove(force=True)

@@ -78,6 +78,7 @@ class RegistryService:
 
         requested = labels.resources
         model.requested_resources = requested.to_dict()
+        model.declared_limits = dict(labels.limits)
         approved = Resources.from_dict(model.approved_resources) if model.approved_resources else None
 
         # a newer digest always replaces whatever was waiting for approval: approving the older one later would roll back

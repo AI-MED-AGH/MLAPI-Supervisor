@@ -18,6 +18,7 @@ class ModelSpec:
     secret_refs: tuple[str, ...] = ()
     queue_url: str | None = None  # queue mode: per-model Redis URL
     max_job_seconds: int = 600  # queue mode: worker termination grace
+    max_pending: int | None = None  # queue mode: jobs the API accepts before refusing more (FASTMLAPI_MAX_PENDING)
     api_resources: Resources | None = None  # queue mode: fixed allotment for the API role
 
 

@@ -1,9 +1,12 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
 from app import session as sessions
 from app.auth import match_admin_key, require_admin
 
+audit = logging.getLogger("app.audit")
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
 
@@ -33,8 +36,10 @@ async def login(body: LoginBody, request: Request) -> Response:
         if state.login_limiter.blocked(client):
             raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed attempts; try again later", headers={"Retry-After": "300"})
         state.login_limiter.record_failure(client)
+        audit.warning("denied login from %s", client)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid admin key")
     state.login_limiter.reset(client)
+    audit.info("admin=%s login", state.settings.admin_names.get(matched, "admin"))
     ttl = state.settings.session_ttl
     response = Response(status_code=status.HTTP_204_NO_CONTENT)
     response.set_cookie(

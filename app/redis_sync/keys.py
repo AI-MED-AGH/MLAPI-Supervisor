@@ -15,6 +15,7 @@ def key_record(key: ApiKey) -> dict:
         "allow_all": bool(key.allow_all),
         "expires_at": key.expires_at,
         "name": key.name,
+        "limits": dict(key.limits or {}),
     }
 
 

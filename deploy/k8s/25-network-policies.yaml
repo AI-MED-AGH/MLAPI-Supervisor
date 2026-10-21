@@ -1,0 +1,44 @@
+# Who may open connections to the platform's own pods. (Models are already fenced in by the per-model NetworkPolicy the
+# Supervisor creates: they may only reach the internet and, in queue mode, the queue Redis.)
+#
+# The key store holds API-key hashes and routes: only the Router and the Supervisor may talk to it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mlapi-redis
+  namespace: mlapi-system
+spec:
+  podSelector: {matchLabels: {app: mlapi-redis}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: mlapi-router}}
+        - podSelector: {matchLabels: {app: mlapi-supervisor}}
+      ports: [{protocol: TCP, port: 6379}]
+---
+# The queue Redis is the one thing a model container may reach inside the cluster (each model has its own ACL user there).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mlapi-queue-redis
+  namespace: mlapi-system
+spec:
+  podSelector: {matchLabels: {app: mlapi-queue-redis}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: mlapi-models}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: mlapi-system}}
+      ports: [{protocol: TCP, port: 6379}]
+---
+# The admin API is reached with `kubectl port-forward`, which NetworkPolicy does not apply to. Nothing else needs it:
+# the Supervisor calls out to Redis and the models, and nothing calls in.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mlapi-supervisor
+  namespace: mlapi-system
+spec:
+  podSelector: {matchLabels: {app: mlapi-supervisor}}
+  policyTypes: [Ingress]
+  ingress: []

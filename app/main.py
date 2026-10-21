@@ -19,6 +19,7 @@ from app.registry.api import approvals_router, models_router
 from app.registry.errors import Conflict, Invalid, NotFound
 from app.registry.resources import ResourceError
 from app.redis_sync.keys import rebuild_keys
+from app.redis_sync.routes import rebuild_route_index
 from app.watchman import watchmanRouter
 
 
@@ -45,6 +46,7 @@ def create_app(
                 await upgrade_to_head(settings.db_url)
             async with app.state.sessionmaker() as session:
                 await rebuild_keys(app.state.redis, session)
+            await rebuild_route_index(app.state.redis)
             if settings.run_background:
                 app.state.services = build_services(app)
                 await app.state.services.deployer.recover_interrupted()
@@ -66,6 +68,9 @@ def create_app(
         description="Supervisor controlling ML model instances",
         version="0.1.0",
         lifespan=lifespan,
+        docs_url="/docs" if settings.enable_docs else None,
+        redoc_url="/redoc" if settings.enable_docs else None,
+        openapi_url="/openapi.json" if settings.enable_docs else None,
     )
     app.state.settings = settings
     app.state.redis = redis

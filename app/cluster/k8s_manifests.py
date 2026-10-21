@@ -38,9 +38,10 @@ def resource_block(res: Resources, *, gpu: bool, ephemeral: str = "2Gi") -> dict
 
 
 def _env(spec: ModelSpec, fastmlapi_role: str, cache: bool, gpu: bool) -> list[dict]:
-    reserved = ("FASTMLAPI_ROLE", "FASTMLAPI_CACHE_DIR", "HF_HOME", "FASTMLAPI_QUEUE_URL")
+    reserved = ("FASTMLAPI_ROLE", "FASTMLAPI_CACHE_DIR", "HF_HOME", "FASTMLAPI_QUEUE_URL", "FASTMLAPI_MAX_PENDING", "FASTMLAPI_EXPOSE_ERRORS")
     env = {k: v for k, v in spec.env.items() if k not in reserved and not k.startswith(("NVIDIA_", "CUDA_"))}
     env["FASTMLAPI_ROLE"] = fastmlapi_role  # platform variables always win
+    env["FASTMLAPI_EXPOSE_ERRORS"] = "false"  # exception text can name files and data; callers see the kind of failure only
     if not gpu:
         # CUDA base images set NVIDIA_VISIBLE_DEVICES=all; where nvidia is the default runtime that would hand every GPU
         # to a workload that was never approved one
@@ -50,6 +51,8 @@ def _env(spec: ModelSpec, fastmlapi_role: str, cache: bool, gpu: bool) -> list[d
         env["HF_HOME"] = "/cache/hf"
     if spec.queue_url:
         env["FASTMLAPI_QUEUE_URL"] = spec.queue_url
+    if spec.max_pending is not None:
+        env["FASTMLAPI_MAX_PENDING"] = str(spec.max_pending)
     return [{"name": k, "value": v} for k, v in sorted(env.items())]
 
 

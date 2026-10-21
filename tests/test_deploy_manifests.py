@@ -47,7 +47,11 @@ def test_supervisor_is_single_instance_and_not_exposed():
     assert dep["spec"]["replicas"] == 1 and dep["spec"]["strategy"]["type"] == "Recreate"
     svc = next(d for d in by_kind("Service") if d["metadata"]["name"] == "mlapi-supervisor")
     assert svc["spec"]["type"] == "ClusterIP"
-    assert by_kind("Ingress") == []
+    backends = [
+        path["backend"]["service"]["name"]
+        for ingress in by_kind("Ingress") for rule in ingress["spec"]["rules"] for path in rule["http"]["paths"]
+    ]
+    assert "mlapi-supervisor" not in backends  # the Router has an Ingress; the admin API never does
     env = {e["name"]: e.get("value") for e in dep["spec"]["template"]["spec"]["containers"][0]["env"]}
     assert env["CLUSTER_BACKEND"] == "kubernetes" and env["K8S_NAMESPACE"] == "mlapi-models"
 

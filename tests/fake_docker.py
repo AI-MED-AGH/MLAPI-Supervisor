@@ -130,6 +130,28 @@ class FakeVolume:
         self._c.volume_map.pop(self.name, None)
 
 
+class FakeNetwork(dict):
+    """A network record (a dict, as the first tests read it) that also knows which containers are attached."""
+
+    def __init__(self, client, name, driver, labels):
+        super().__init__(driver=driver, labels=labels)
+        self._client, self.name, self.members = client, name, set()
+
+    def connect(self, container, **kwargs):
+        name = getattr(container, "name", container)
+        if name not in self._client.container_map:
+            raise docker.errors.NotFound(f"no such container {name}")
+        if name in self.members:
+            raise docker.errors.APIError("endpoint with name already exists in network")
+        self.members.add(name)
+
+    def disconnect(self, container, force=False):
+        self.members.discard(getattr(container, "name", container))
+
+    def remove(self):
+        self._client.network_map.pop(self.name, None)
+
+
 class _Networks:
     def __init__(self, client):
         self._c = client
@@ -140,7 +162,7 @@ class _Networks:
         return self._c.network_map[name]
 
     def create(self, name, driver="bridge", labels=None):
-        self._c.network_map[name] = {"driver": driver, "labels": labels or {}}
+        self._c.network_map[name] = FakeNetwork(self._c, name, driver, labels or {})
         return self._c.network_map[name]
 
 

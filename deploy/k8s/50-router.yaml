@@ -1,4 +1,6 @@
-# The Router is the only component exposed to clients. Put an Ingress with TLS in front of this Service.
+# The Router is the only component exposed to clients, through the Ingress in 55-ingress.yaml.
+# Memory: it holds at most MAX_INFLIGHT_RESPONSE_BYTES (default 128 MiB) of model replies at once, and peaks at about twice
+# that, so keep that setting well below this pod's memory limit.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
