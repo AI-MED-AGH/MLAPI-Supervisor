@@ -1,8 +1,18 @@
 import logging
 from dataclasses import dataclass
 
+from kubernetes.client import V1Pod
+
 from app.cluster import k8s_manifests as m
-from app.cluster.backend import BackendError, ModelSpec, RuntimeStatus, Usage
+from app.cluster.backend import (
+    BackendError,
+    ModelRuntimeDeploymentStatus,
+    ModelRuntimePodStatus,
+    ModelSnapshot,
+    ModelSpec,
+    RuntimeStatus,
+    Usage,
+)
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -39,7 +49,16 @@ async def connect(settings: Settings) -> K8sApi:
 
 
 _CPU_UNITS = {"n": 1e-6, "u": 1e-3, "m": 1.0, "": 1000.0}
-_MEMORY_UNITS = {"Ki": 1024, "Mi": 1024**2, "Gi": 1024**3, "Ti": 1024**4, "k": 1000, "M": 1000**2, "G": 1000**3, "": 1}
+_MEMORY_UNITS = {
+    "Ki": 1024,
+    "Mi": 1024**2,
+    "Gi": 1024**3,
+    "Ti": 1024**4,
+    "k": 1000,
+    "M": 1000**2,
+    "G": 1000**3,
+    "": 1,
+}
 
 
 def _quantity(raw: str, units: dict[str, float]) -> float:
@@ -98,21 +117,36 @@ class KubernetesBackend:
         try:
             await self._ensure_pvc(api, spec)
             await self._create_or_replace(
-                api.net.create_namespaced_network_policy, api.net.replace_namespaced_network_policy,
-                n["policy"], m.network_policy(spec, self._s),
+                api.net.create_namespaced_network_policy,
+                api.net.replace_namespaced_network_policy,
+                n["policy"],
+                m.network_policy(spec, self._s),
             )
             await self._create_or_replace(
-                api.core.create_namespaced_service, api.core.replace_namespaced_service,
-                n["service"], self._service_body(spec),
+                api.core.create_namespaced_service,
+                api.core.replace_namespaced_service,
+                n["service"],
+                self._service_body(spec),
             )
-            roles = [("api", n["api"], 1), ("worker", n["worker"], 0)] if spec.mode == "queue" else [("main", n["main"], 1)]
+            roles = (
+                [("api", n["api"], 1), ("worker", n["worker"], 0)]
+                if spec.mode == "queue"
+                else [("main", n["main"], 1)]
+            )
             for role, name, default_replicas in roles:
                 existing = await self._current_replicas(api, name)
                 # a deploy always starts the model; only a queue worker keeps its current replica count
-                replicas = existing if (role == "worker" and existing is not None) else default_replicas
+                replicas = (
+                    existing
+                    if (role == "worker" and existing is not None)
+                    else default_replicas
+                )
                 body = m.deployment(spec, role, self._s, replicas)
                 await self._create_or_replace(
-                    api.apps.create_namespaced_deployment, api.apps.replace_namespaced_deployment, name, body
+                    api.apps.create_namespaced_deployment,
+                    api.apps.replace_namespaced_deployment,
+                    name,
+                    body,
                 )
         except BackendError:
             raise
@@ -125,9 +159,13 @@ class KubernetesBackend:
 
     async def _ensure_pvc(self, api: K8sApi, spec: ModelSpec) -> None:
         try:
-            await api.core.create_namespaced_persistent_volume_claim(self._ns, m.pvc(spec, self._s))
+            await api.core.create_namespaced_persistent_volume_claim(
+                self._ns, m.pvc(spec, self._s)
+            )
         except Exception as exc:
-            if not _is(exc, 409):  # an existing claim is kept: its spec is immutable and it holds the cache
+            if not _is(
+                exc, 409
+            ):  # an existing claim is kept: its spec is immutable and it holds the cache
                 raise
 
     async def scale(self, name: str, replicas: int, role: str = "main") -> None:
@@ -171,7 +209,9 @@ class KubernetesBackend:
             main = None
             for candidate in (n["api"], n["main"]):
                 try:
-                    main = await api.apps.read_namespaced_deployment(candidate, self._ns)
+                    main = await api.apps.read_namespaced_deployment(
+                        candidate, self._ns
+                    )
                     break
                 except Exception as exc:
                     if not _is(exc, 404):
@@ -180,12 +220,16 @@ class KubernetesBackend:
                 return RuntimeStatus(exists=False)
             worker_replicas = 0
             try:
-                worker = await api.apps.read_namespaced_deployment(n["worker"], self._ns)
+                worker = await api.apps.read_namespaced_deployment(
+                    n["worker"], self._ns
+                )
                 worker_replicas = worker.status.ready_replicas or 0
             except Exception as exc:
                 if not _is(exc, 404):
                     raise
-            pods = await api.core.list_namespaced_pod(self._ns, label_selector=f"mlapi/model={name}")
+            pods = await api.core.list_namespaced_pod(
+                self._ns, label_selector=f"mlapi/model={name}"
+            )
             return RuntimeStatus(
                 exists=True,
                 ready=self._rolled_out(main),
@@ -226,7 +270,11 @@ class KubernetesBackend:
                     return f"unschedulable: {message[:200]}"
             for cs in pod.status.container_statuses or []:
                 waiting = cs.state.waiting if cs.state else None
-                if waiting and waiting.reason in ("ImagePullBackOff", "ErrImagePull", "InvalidImageName"):
+                if waiting and waiting.reason in (
+                    "ImagePullBackOff",
+                    "ErrImagePull",
+                    "InvalidImageName",
+                ):
                     return f"image pull failed: {waiting.reason}"
         return None
 
@@ -235,7 +283,10 @@ class KubernetesBackend:
         total = 0
         for pod in pods:
             if (pod.metadata.labels or {}).get("mlapi/role") == "main":
-                total += sum(cs.restart_count or 0 for cs in (pod.status.container_statuses or []))
+                total += sum(
+                    cs.restart_count or 0
+                    for cs in (pod.status.container_statuses or [])
+                )
         return total
 
     async def endpoint(self, name: str) -> str:
@@ -247,21 +298,31 @@ class KubernetesBackend:
             return None
         try:
             metrics = await api.custom.list_namespaced_custom_object(
-                "metrics.k8s.io", "v1beta1", self._ns, "pods", label_selector=f"mlapi/model={name}"
+                "metrics.k8s.io",
+                "v1beta1",
+                self._ns,
+                "pods",
+                label_selector=f"mlapi/model={name}",
             )
         except Exception as exc:
             if _is(exc, 404):  # metrics-server is not installed
                 if not self._warned_metrics:
-                    logger.warning("metrics.k8s.io is not available; install metrics-server to see model resource use")
+                    logger.warning(
+                        "metrics.k8s.io is not available; install metrics-server to see model resource use"
+                    )
                     self._warned_metrics = True
                 return None
             raise BackendError(f"kubernetes error: {exc}") from exc
-        containers = [c for pod in metrics.get("items", []) for c in pod.get("containers", [])]
+        containers = [
+            c for pod in metrics.get("items", []) for c in pod.get("containers", [])
+        ]
         if not containers:
             return None
         return Usage(
             cpu_m=sum(_quantity(c["usage"]["cpu"], _CPU_UNITS) for c in containers),
-            memory_bytes=int(sum(_quantity(c["usage"]["memory"], _MEMORY_UNITS) for c in containers)),
+            memory_bytes=int(
+                sum(_quantity(c["usage"]["memory"], _MEMORY_UNITS) for c in containers)
+            ),
         )
 
     async def list_models(self) -> list[str]:
@@ -272,4 +333,128 @@ class KubernetesBackend:
             )
         except Exception as exc:
             raise BackendError(f"kubernetes error: {exc}") from exc
-        return sorted({d.metadata.labels["mlapi/model"] for d in deployments.items if "mlapi/model" in (d.metadata.labels or {})})
+        return sorted(
+            {
+                d.metadata.labels["mlapi/model"]
+                for d in deployments.items
+                if "mlapi/model" in (d.metadata.labels or {})
+            }
+        )
+
+    async def cluster_snapshot(self) -> list[ModelSnapshot]:
+        """Should call each api only once to get statuses of all models in cluster"""
+        model_list = await self.list_models()
+        pods_statuses: dict[
+            str, ModelRuntimePodStatus
+        ] = await self._get_models_runtime_pods_statuses()
+        deployment_statuses: dict[
+            str, ModelRuntimeDeploymentStatus
+        ] = await self._get_models_runtime_deployment_statuses()
+        usage_per_model: dict[str, Usage | None] = await self._get_usage_per_model()
+        cluster_snapshot: list[ModelSnapshot] = [
+            ModelSnapshot.from_k8_apis(
+                name,
+                deployment_statuses.get(name),
+                pods_statuses.get(name),
+                usage_per_model.get(name),
+            )
+            for name in model_list
+        ]
+        return cluster_snapshot
+
+    async def _get_usage_per_model(self) -> dict[str, Usage | None]:
+        """returns a dict of model name and Usage"""
+        api = await self._get_api()
+        if api.custom is None:
+            return {}
+        try:
+            metrics = await api.custom.list_namespaced_custom_object(
+                "metrics.k8s.io",
+                "v1beta1",
+                self._ns,
+                "pods",
+                label_selector="mlapi/model",
+            )
+        except Exception as exc:
+            if _is(exc, 404):  # metrics-server is not installed
+                if not self._warned_metrics:
+                    logger.warning(
+                        "metrics.k8s.io is not available; install metrics-server to see model resource use"
+                    )
+                    self._warned_metrics = True
+                return {}
+            raise BackendError(f"kubernetes error: {exc}") from exc
+        usage_per_model: dict[str, Usage | None] = {}
+        for pod in metrics.get("items", []):
+            name = pod.get("metadata", {}).get("labels", {}).get("mlapi/model")
+            if name is None:
+                continue
+            containers = [c for c in pod.get("containers", [])]
+            if not containers:
+                usage_per_model[name] = None
+                continue
+            usage_per_model[name] = Usage(
+                cpu_m=sum(_quantity(c["usage"]["cpu"], _CPU_UNITS) for c in containers),
+                memory_bytes=int(
+                    sum(
+                        _quantity(c["usage"]["memory"], _MEMORY_UNITS)
+                        for c in containers
+                    )
+                ),
+            )
+        return usage_per_model
+
+    async def _get_models_runtime_pods_statuses(
+        self,
+    ) -> dict[str, ModelRuntimePodStatus]:
+        """returns dict with model name and status information gathered from k8 pod api"""
+        api = await self._get_api()
+        try:
+            pods = await api.core.list_namespaced_pod(
+                self._ns, label_selector=f"mlapi/model"
+            )
+        except Exception as exc:
+            raise BackendError(f"kubernetes error: {exc}") from exc
+        pods_by_model: dict[str, list[V1Pod]] = {}
+        for pod in pods.get("items", []):
+            name = pod.get("metadata", {}).get("labels", {}).get("mlapi/model")
+            if name is None:
+                continue
+
+            if pods_by_model.get(name) is None:
+                pods_by_model[name] = []
+            pods_by_model[name].append(pod)
+        pods_info_by_model = {
+            name: ModelRuntimePodStatus(
+                self._pending_reason(pods), self._restarts(pods)
+            )
+            for name, pods in pods_by_model.items()
+        }
+        return pods_info_by_model
+
+    async def _get_models_runtime_deployment_statuses(
+        self,
+    ) -> dict[str, ModelRuntimeDeploymentStatus]:
+        """returns dict with model name and status information gathered from k8 deployment api"""
+        api = await self._get_api()
+        try:
+            deployments = await api.apps.list_namespaced_deployment(
+                self._ns, label_selector="app.kubernetes.io/managed-by=mlapi-supervisor"
+            )
+        except Exception as exc:
+            raise BackendError(f"kubernetes error: {exc}") from exc
+        deployments_statuses = {}
+        for deployment in deployments.get("items", []):
+            label = deployment.get("labels", {})
+            kind = label.get("mlapi/role")
+            model = label.get("mlapi/model")
+            if model not in deployments_statuses:
+                deployments_statuses[model] = ModelRuntimeDeploymentStatus()
+            if kind == "main":
+                deployments_statuses[model].replicas = deployment.spec.replicas or 0
+                deployments_statuses[model].ready = self._rolled_out(deployment)
+            elif kind == "worker":
+                deployments_statuses[model].worker_replicas = (
+                    deployment.status.ready_replicas or 0
+                )
+        return deployments_statuses

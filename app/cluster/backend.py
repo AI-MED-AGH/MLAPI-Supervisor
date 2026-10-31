@@ -18,8 +18,12 @@ class ModelSpec:
     secret_refs: tuple[str, ...] = ()
     queue_url: str | None = None  # queue mode: per-model Redis URL
     max_job_seconds: int = 600  # queue mode: worker termination grace
-    max_pending: int | None = None  # queue mode: jobs the API accepts before refusing more (FASTMLAPI_MAX_PENDING)
-    api_resources: Resources | None = None  # queue mode: fixed allotment for the API role
+    max_pending: int | None = (
+        None  # queue mode: jobs the API accepts before refusing more (FASTMLAPI_MAX_PENDING)
+    )
+    api_resources: Resources | None = (
+        None  # queue mode: fixed allotment for the API role
+    )
 
 
 @dataclass(frozen=True)
@@ -33,11 +37,59 @@ class RuntimeStatus:
 
 
 @dataclass(frozen=True)
+class ModelRuntimePodStatus:
+    """Runtime status information gathered from pods api"""
+
+    pending_reason: str | None = None  # e.g. "unschedulable: no free GPU slice"
+    restarts: int = 0
+
+
+@dataclass()
+class ModelRuntimeDeploymentStatus:
+    """Runtime status information gathered from deployment api"""
+
+    ready: bool = False  # sync: the model container; queue: the API container
+    replicas: int = 0  # running replicas of the main workload (sync model / queue API)
+    worker_replicas: int = 0  # queue mode only
+
+
+@dataclass(frozen=True)
 class Usage:
     """What a model is using right now, summed over its running containers (API and worker in queue mode)."""
 
     cpu_m: float  # millicores
     memory_bytes: int  # working set (page cache excluded)
+
+
+@dataclass(frozen=True)
+class ModelSnapshot:
+    """Model information, used for observability"""
+
+    name: str
+    status: RuntimeStatus
+    usage: Usage | None
+
+    @classmethod
+    def from_k8_apis(
+        cls,
+        name: str,
+        deployment_status: ModelRuntimeDeploymentStatus | None,
+        pods_status: ModelRuntimePodStatus | None,
+        usage: Usage | None,
+    ):
+        exists = deployment_status is not None and pods_status is not None
+        if exists:
+            runtime_status = RuntimeStatus(
+                exists=exists,
+                ready=deployment_status.ready,
+                replicas=deployment_status.replicas,
+                worker_replicas=deployment_status.worker_replicas,
+                pending_reason=pods_status.pending_reason,
+                restarts=pods_status.restarts,
+            )
+        else:
+            runtime_status = RuntimeStatus(exists)
+        return cls(name=name, status=runtime_status, usage=usage)
 
 
 class ClusterBackend(Protocol):
@@ -58,3 +110,6 @@ class ClusterBackend(Protocol):
 
     async def usage(self, name: str) -> Usage | None:
         """Current CPU and memory use, or None when nothing of the model is running or the backend cannot measure."""
+
+    async def cluster_snapshot(self) -> list[ModelSnapshot]:
+        """List of all models data, for cluster observability"""
