@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from dataclasses import dataclass
 
@@ -343,22 +344,22 @@ class KubernetesBackend:
 
     async def cluster_snapshot(self) -> list[ModelSnapshot]:
         """Should call each api only once to get statuses of all models in cluster"""
-        model_list = await self.list_models()
-        pods_statuses: dict[
-            str, ModelRuntimePodStatus
-        ] = await self._get_models_runtime_pods_statuses()
-        deployment_statuses: dict[
-            str, ModelRuntimeDeploymentStatus
-        ] = await self._get_models_runtime_deployment_statuses()
-        usage_per_model: dict[str, Usage | None] = await self._get_usage_per_model()
+        snapshots = await asyncio.gather(
+            *(
+                self.list_models(),
+                self._get_models_runtime_deployment_statuses(),
+                self._get_models_runtime_pods_statuses(),
+                self._get_usage_per_model(),
+            )
+        )
         cluster_snapshot: list[ModelSnapshot] = [
             ModelSnapshot.from_k8_apis(
                 name,
-                deployment_statuses.get(name),
-                pods_statuses.get(name),
-                usage_per_model.get(name),
+                snapshots[1].get(name),
+                snapshots[2].get(name),
+                snapshots[3].get(name),
             )
-            for name in model_list
+            for name in snapshots[0]
         ]
         return cluster_snapshot
 
