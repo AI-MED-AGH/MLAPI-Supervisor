@@ -7,6 +7,7 @@ from docker.types import DeviceRequest
 
 from app.cluster.backend import (
     BackendError,
+    ModelRuntimeDeploymentStatus,
     ModelSnapshot,
     ModelSpec,
     RuntimeStatus,
@@ -77,17 +78,21 @@ class DockerBackend:
 
     async def cluster_snapshot(self) -> list[ModelSnapshot]:
         """Should call each api only once to get statuses of all models in cluster"""
-        containers = await self.list_models()
-        cluster_snapshot = [
-            ModelSnapshot(
-                container,
-                await self.status(container),
-                await self.usage(container),
+        snapshots = await asyncio.gather(
+            *(
+                self._run(self.list_models),
+                self._status_by_model(),
+                self._usage_by_model(),
             )
-            for container in containers
+        )
+        return [
+            ModelSnapshot(
+                name,
+                snapshots[1].get(name, RuntimeStatus(exists=False)),
+                snapshots[2].get(name),
+            )
+            for name in snapshots[0]
         ]
-
-        return cluster_snapshot
 
     @staticmethod
     async def _run(fn, *args):
@@ -444,6 +449,61 @@ class DockerBackend:
         return sorted(
             {c.labels["mlapi.model"] for c in containers if "mlapi.model" in c.labels}
         )
+
+    def _all_mlapi_containers(self):
+        containers = self.client.containers.list(
+            all=True, filters={"label": ["mlapi.managed=true"]}
+        )
+        return containers
+
+    async def _usage_by_model(self) -> dict[str, Usage]:
+        containers = await self._run(self._all_mlapi_containers)
+        if not containers:
+            return {}
+        # `docker stats` takes about a second per container, so measure them side by side
+        samples = await asyncio.gather(
+            *(self._run(self._container_usage, c) for c in containers)
+        )
+        valid_samples = [(s, c) for s, c in zip(samples, containers) if s is not None]
+        if not valid_samples:
+            return {}
+        usage_per_model = {}
+        for usage, container in valid_samples:
+            name = container.labels.get("mlapi.model")
+            if name is None:
+                continue
+            if name not in usage_per_model:
+                usage_per_model[name] = [0, 0]
+            usage_per_model[name][0] += usage[0]
+            usage_per_model[name][1] += usage[1]
+
+        return {name: Usage(*stats) for name, stats in usage_per_model.items()}
+
+    async def _status_by_model(self) -> dict[str, RuntimeStatus]:
+        all_containers = await self._run(self._all_mlapi_containers)
+
+        statuses: dict[str, dict] = {}
+        for container in all_containers:
+            model = container.labels.get("mlapi.model")
+            kind = container.labels.get("mlapi.role")
+            running = self._running(container)
+            if model is None:
+                continue
+            if model not in statuses:
+                statuses[model] = {"exists": True}
+            if kind == "main":
+                running = self._running(container)
+                statuses[model]["ready"] = running
+                statuses[model]["replicas"] = 1 if container.status == "running" else 0
+                statuses[model]["restarts"] = (
+                    int(container.attrs.get("RestartCount", 0)),
+                )
+            elif kind == "worker":
+                statuses[model]["worker_replicas"] = (
+                    1 if container is not None and container.status == "running" else 0,
+                )
+
+        return {name: RuntimeStatus(**kwargs) for name, kwargs in statuses.items()}
 
 
 class DockerInspector:

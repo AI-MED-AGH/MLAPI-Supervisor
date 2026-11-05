@@ -352,7 +352,7 @@ class KubernetesBackend:
                 self._get_usage_per_model(),
             )
         )
-        cluster_snapshot: list[ModelSnapshot] = [
+        return [
             ModelSnapshot.from_k8_apis(
                 name,
                 snapshots[1].get(name),
@@ -361,7 +361,6 @@ class KubernetesBackend:
             )
             for name in snapshots[0]
         ]
-        return cluster_snapshot
 
     async def _get_usage_per_model(self) -> dict[str, Usage | None]:
         """returns a dict of model name and Usage"""
