@@ -79,11 +79,9 @@ class DockerBackend:
     async def cluster_snapshot(self) -> list[ModelSnapshot]:
         """Should call each api only once to get statuses of all models in cluster"""
         snapshots = await asyncio.gather(
-            *(
-                self._run(self.list_models),
-                self._status_by_model(),
-                self._usage_by_model(),
-            )
+            self.list_models(),
+            self._status_by_model(),
+            self._usage_by_model(),
         )
         return [
             ModelSnapshot(
@@ -495,12 +493,12 @@ class DockerBackend:
                 running = self._running(container)
                 statuses[model]["ready"] = running
                 statuses[model]["replicas"] = 1 if container.status == "running" else 0
-                statuses[model]["restarts"] = (
-                    int(container.attrs.get("RestartCount", 0)),
+                statuses[model]["restarts"] = int(
+                    container.attrs.get("RestartCount", 0)
                 )
             elif kind == "worker":
                 statuses[model]["worker_replicas"] = (
-                    1 if container is not None and container.status == "running" else 0,
+                    1 if container is not None and container.status == "running" else 0
                 )
 
         return {name: RuntimeStatus(**kwargs) for name, kwargs in statuses.items()}

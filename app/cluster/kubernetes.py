@@ -345,12 +345,10 @@ class KubernetesBackend:
     async def cluster_snapshot(self) -> list[ModelSnapshot]:
         """Should call each api only once to get statuses of all models in cluster"""
         snapshots = await asyncio.gather(
-            *(
-                self.list_models(),
-                self._get_models_runtime_deployment_statuses(),
-                self._get_models_runtime_pods_statuses(),
-                self._get_usage_per_model(),
-            )
+            self.list_models(),
+            self._get_models_runtime_deployment_statuses(),
+            self._get_models_runtime_pods_statuses(),
+            self._get_usage_per_model(),
         )
         return [
             ModelSnapshot.from_k8_apis(
@@ -384,25 +382,23 @@ class KubernetesBackend:
                     self._warned_metrics = True
                 return {}
             raise BackendError(f"kubernetes error: {exc}") from exc
-        usage_per_model: dict[str, Usage | None] = {}
+        usage_per_model: dict[str, list] = {}
         for pod in metrics.get("items", []):
             name = pod.get("metadata", {}).get("labels", {}).get("mlapi/model")
             if name is None:
                 continue
-            containers = [c for c in pod.get("containers", [])]
+            containers = pod.get("containers", [])
             if not containers:
-                usage_per_model[name] = None
                 continue
-            usage_per_model[name] = Usage(
-                cpu_m=sum(_quantity(c["usage"]["cpu"], _CPU_UNITS) for c in containers),
-                memory_bytes=int(
-                    sum(
-                        _quantity(c["usage"]["memory"], _MEMORY_UNITS)
-                        for c in containers
-                    )
-                ),
+            if name not in usage_per_model:
+                usage_per_model[name] = [0, 0]
+            usage_per_model[name][0] += sum(
+                _quantity(c["usage"]["cpu"], _CPU_UNITS) for c in containers
             )
-        return usage_per_model
+            usage_per_model[name][1] += int(
+                sum(_quantity(c["usage"]["memory"], _MEMORY_UNITS) for c in containers)
+            )
+        return {name: Usage(*stats) for name, stats in usage_per_model.items()}
 
     async def _get_models_runtime_pods_statuses(
         self,
@@ -416,8 +412,8 @@ class KubernetesBackend:
         except Exception as exc:
             raise BackendError(f"kubernetes error: {exc}") from exc
         pods_by_model: dict[str, list[V1Pod]] = {}
-        for pod in pods.get("items", []):
-            name = pod.get("metadata", {}).get("labels", {}).get("mlapi/model")
+        for pod in pods.items:
+            name = pod.metadata.labels.get("mlapi/model")
             if name is None:
                 continue
 
@@ -444,13 +440,13 @@ class KubernetesBackend:
         except Exception as exc:
             raise BackendError(f"kubernetes error: {exc}") from exc
         deployments_statuses = {}
-        for deployment in deployments.get("items", []):
-            label = deployment.get("labels", {})
+        for deployment in deployments.items:
+            label = deployment.metadata.labels or {}
             kind = label.get("mlapi/role")
             model = label.get("mlapi/model")
             if model not in deployments_statuses:
                 deployments_statuses[model] = ModelRuntimeDeploymentStatus()
-            if kind == "main":
+            if kind in ("main", "api"):
                 deployments_statuses[model].replicas = deployment.spec.replicas or 0
                 deployments_statuses[model].ready = self._rolled_out(deployment)
             elif kind == "worker":
