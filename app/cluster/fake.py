@@ -1,6 +1,12 @@
 from dataclasses import dataclass
 
-from app.cluster.backend import BackendError, ModelSpec, RuntimeStatus, Usage
+from app.cluster.backend import (
+    BackendError,
+    ModelSnapshot,
+    ModelSpec,
+    RuntimeStatus,
+    Usage,
+)
 
 
 @dataclass
@@ -18,10 +24,14 @@ class FakeBackend:
         self.ready_after = ready_after
         self.gpu_slots = gpu_slots  # None = unlimited
         self.fail_apply: Exception | None = None
-        self.never_ready: set[str] = set()  # image refs whose workloads never become ready
+        self.never_ready: set[str] = (
+            set()
+        )  # image refs whose workloads never become ready
         self.models: dict[str, _Entry] = {}
         self.calls: list[tuple] = []
-        self.usage_by_model: dict[str, Usage | None] = {}  # what usage() reports; unset = nothing running
+        self.usage_by_model: dict[
+            str, Usage | None
+        ] = {}  # what usage() reports; unset = nothing running
         self.usage_error: Exception | None = None
 
     async def apply_model(self, spec: ModelSpec) -> None:
@@ -58,9 +68,16 @@ class FakeBackend:
             return RuntimeStatus(exists=False)
         wants_gpu = entry.spec.resources.gpu
         gpu_role_running = (
-            entry.worker_replicas > 0 if entry.spec.mode == "queue" else entry.replicas > 0
+            entry.worker_replicas > 0
+            if entry.spec.mode == "queue"
+            else entry.replicas > 0
         )
-        if wants_gpu and gpu_role_running and self.gpu_slots is not None and self.gpu_slots < 1:
+        if (
+            wants_gpu
+            and gpu_role_running
+            and self.gpu_slots is not None
+            and self.gpu_slots < 1
+        ):
             return RuntimeStatus(
                 exists=True,
                 replicas=entry.replicas,
@@ -68,10 +85,18 @@ class FakeBackend:
                 pending_reason="unschedulable: no free GPU slice",
             )
         if entry.spec.image in self.never_ready:
-            return RuntimeStatus(exists=True, replicas=entry.replicas, worker_replicas=entry.worker_replicas)
+            return RuntimeStatus(
+                exists=True,
+                replicas=entry.replicas,
+                worker_replicas=entry.worker_replicas,
+            )
         if entry.replicas > 0 and entry.polls_left > 0:
             entry.polls_left -= 1
-            return RuntimeStatus(exists=True, replicas=entry.replicas, worker_replicas=entry.worker_replicas)
+            return RuntimeStatus(
+                exists=True,
+                replicas=entry.replicas,
+                worker_replicas=entry.worker_replicas,
+            )
         return RuntimeStatus(
             exists=True,
             ready=entry.replicas > 0,
@@ -89,3 +114,14 @@ class FakeBackend:
         if self.usage_error is not None:
             raise self.usage_error
         return self.usage_by_model.get(name)
+
+    async def cluster_snapshot(self) -> list[ModelSnapshot]:
+        cluster_snapshot = [
+            ModelSnapshot(
+                name,
+                await self.status(name),
+                await self.usage(name),
+            )
+            for name in await self.list_models()
+        ]
+        return cluster_snapshot

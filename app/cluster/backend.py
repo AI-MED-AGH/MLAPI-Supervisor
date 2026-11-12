@@ -18,8 +18,12 @@ class ModelSpec:
     secret_refs: tuple[str, ...] = ()
     queue_url: str | None = None  # queue mode: per-model Redis URL
     max_job_seconds: int = 600  # queue mode: worker termination grace
-    max_pending: int | None = None  # queue mode: jobs the API accepts before refusing more (FASTMLAPI_MAX_PENDING)
-    api_resources: Resources | None = None  # queue mode: fixed allotment for the API role
+    max_pending: int | None = (
+        None  # queue mode: jobs the API accepts before refusing more (FASTMLAPI_MAX_PENDING)
+    )
+    api_resources: Resources | None = (
+        None  # queue mode: fixed allotment for the API role
+    )
 
 
 @dataclass(frozen=True)
@@ -40,6 +44,15 @@ class Usage:
     memory_bytes: int  # working set (page cache excluded)
 
 
+@dataclass(frozen=True)
+class ModelSnapshot:
+    """Model information, used for observability"""
+
+    name: str
+    status: RuntimeStatus
+    usage: Usage | None
+
+
 class ClusterBackend(Protocol):
     async def apply_model(self, spec: ModelSpec) -> None: ...
 
@@ -58,3 +71,6 @@ class ClusterBackend(Protocol):
 
     async def usage(self, name: str) -> Usage | None:
         """Current CPU and memory use, or None when nothing of the model is running or the backend cannot measure."""
+
+    async def cluster_snapshot(self) -> list[ModelSnapshot]:
+        """List of all models data, for cluster observability"""

@@ -1,4 +1,5 @@
 """A small in-memory fake of the kubernetes_asyncio APIs that KubernetesBackend uses."""
+
 from types import SimpleNamespace as NS
 
 
@@ -12,10 +13,19 @@ def _deployment(body, previous=None):
     generation = (previous.metadata.generation + 1) if previous else 1
     replicas = body["spec"]["replicas"]
     return NS(
-        metadata=NS(name=body["metadata"]["name"], labels=body["metadata"]["labels"], generation=generation),
+        metadata=NS(
+            name=body["metadata"]["name"],
+            labels=body["metadata"]["labels"],
+            generation=generation,
+        ),
         spec=NS(replicas=replicas, body=body),
-        status=NS(observed_generation=generation, updated_replicas=replicas, replicas=replicas,
-                  available_replicas=replicas, ready_replicas=replicas),
+        status=NS(
+            observed_generation=generation,
+            updated_replicas=replicas,
+            replicas=replicas,
+            available_replicas=replicas,
+            ready_replicas=replicas,
+        ),
     )
 
 
@@ -46,7 +56,9 @@ class FakeApps:
             raise ApiException(404)
         d = self.deployments[name]
         d.spec.replicas = body["spec"]["replicas"]
-        d.status.replicas = d.status.updated_replicas = d.status.available_replicas = d.status.ready_replicas = d.spec.replicas
+        d.status.replicas = d.status.updated_replicas = d.status.available_replicas = (
+            d.status.ready_replicas
+        ) = d.spec.replicas
 
     async def delete_namespaced_deployment(self, name, ns):
         self.calls.append(("delete_deployment", name))
@@ -109,12 +121,41 @@ class FakeNet:
             raise ApiException(404)
 
 
-def pod(role="main", phase="Running", restarts=0, unschedulable=None, waiting=None):
+class FakeCustom:
+    def __init__(self, items=None, missing=False):
+        self.items = items or []
+        self.missing = missing
+        self.calls = []
+
+    async def list_namespaced_custom_object(
+        self, group, version, ns, plural, label_selector=None
+    ):
+        self.calls.append(("list_custom", group, plural, label_selector))
+        if self.missing:
+            raise ApiException(404)
+        return {"items": self.items}
+
+
+def pod(
+    role="main",
+    phase="Running",
+    restarts=0,
+    unschedulable=None,
+    waiting=None,
+    model=None,
+):
     conditions = []
     if unschedulable is not None:
         conditions = [NS(type="PodScheduled", status="False", message=unschedulable)]
     state = NS(waiting=NS(reason=waiting)) if waiting else NS(waiting=None)
+    labels = {"mlapi/role": role}
+    if model is not None:
+        labels["mlapi/model"] = model
     return NS(
-        metadata=NS(labels={"mlapi/role": role}),
-        status=NS(phase=phase, conditions=conditions, container_statuses=[NS(restart_count=restarts, state=state)]),
+        metadata=NS(labels=labels),
+        status=NS(
+            phase=phase,
+            conditions=conditions,
+            container_statuses=[NS(restart_count=restarts, state=state)],
+        ),
     )
