@@ -2,13 +2,9 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
-from kubernetes.client import V1Pod
-
 from app.cluster import k8s_manifests as m
 from app.cluster.backend import (
     BackendError,
-    ModelRuntimeDeploymentStatus,
-    ModelRuntimePodStatus,
     ModelSnapshot,
     ModelSpec,
     RuntimeStatus,
@@ -17,6 +13,20 @@ from app.cluster.backend import (
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _PodStatus:
+    pending_reason: str | None = None
+    restarts: int = 0
+
+
+@dataclass
+class _DeploymentStatus:
+    exists: bool = False
+    ready: bool = False
+    replicas: int = 0
+    worker_replicas: int = 0
 
 
 @dataclass
@@ -343,26 +353,36 @@ class KubernetesBackend:
         )
 
     async def cluster_snapshot(self) -> list[ModelSnapshot]:
-        """Should call each api only once to get statuses of all models in cluster"""
-        snapshots = await asyncio.gather(
-            self.list_models(),
-            self._get_models_runtime_deployment_statuses(),
-            self._get_models_runtime_pods_statuses(),
-            self._get_usage_per_model(),
-        )
-        return [
-            ModelSnapshot.from_k8_apis(
-                name,
-                snapshots[1].get(name),
-                snapshots[2].get(name),
-                snapshots[3].get(name),
-            )
-            for name in snapshots[0]
-        ]
-
-    async def _get_usage_per_model(self) -> dict[str, Usage | None]:
-        """returns a dict of model name and Usage"""
+        """Calls each Kubernetes API resource endpoint only once to gather statuses for all models."""
         api = await self._get_api()
+        deployments, pods, usage = await asyncio.gather(
+            self._get_models_runtime_deployment_statuses(api),
+            self._get_models_runtime_pods_statuses(api),
+            self._get_usage_per_model(api),
+        )
+        snapshots: list[ModelSnapshot] = []
+        for name in sorted(deployments):
+            dep_status = deployments[name]
+            pod_status = pods.get(name, _PodStatus())
+            status = (
+                RuntimeStatus(
+                    exists=True,
+                    ready=dep_status.ready,
+                    replicas=dep_status.replicas,
+                    worker_replicas=dep_status.worker_replicas,
+                    pending_reason=pod_status.pending_reason,
+                    restarts=pod_status.restarts,
+                )
+                if dep_status.exists
+                else RuntimeStatus(exists=False)
+            )
+            snapshots.append(
+                ModelSnapshot(name=name, status=status, usage=usage.get(name))
+            )
+        return snapshots
+
+    async def _get_usage_per_model(self, api: K8sApi) -> dict[str, Usage]:
+        """Returns a dict mapping model name to Usage."""
         if api.custom is None:
             return {}
         try:
@@ -391,7 +411,7 @@ class KubernetesBackend:
             if not containers:
                 continue
             if name not in usage_per_model:
-                usage_per_model[name] = [0, 0]
+                usage_per_model[name] = [0.0, 0]
             usage_per_model[name][0] += sum(
                 _quantity(c["usage"]["cpu"], _CPU_UNITS) for c in containers
             )
@@ -401,56 +421,51 @@ class KubernetesBackend:
         return {name: Usage(*stats) for name, stats in usage_per_model.items()}
 
     async def _get_models_runtime_pods_statuses(
-        self,
-    ) -> dict[str, ModelRuntimePodStatus]:
-        """returns dict with model name and status information gathered from k8 pod api"""
-        api = await self._get_api()
+        self, api: K8sApi
+    ) -> dict[str, _PodStatus]:
+        """Returns a dict mapping model name to pod status info gathered from the K8s pod API."""
         try:
             pods = await api.core.list_namespaced_pod(
-                self._ns, label_selector=f"mlapi/model"
+                self._ns, label_selector="mlapi/model"
             )
         except Exception as exc:
             raise BackendError(f"kubernetes error: {exc}") from exc
-        pods_by_model: dict[str, list[V1Pod]] = {}
+        pods_by_model: dict[str, list] = {}
         for pod in pods.items:
-            name = pod.metadata.labels.get("mlapi/model")
+            name = (pod.metadata.labels or {}).get("mlapi/model")
             if name is None:
                 continue
-
-            if pods_by_model.get(name) is None:
-                pods_by_model[name] = []
-            pods_by_model[name].append(pod)
-        pods_info_by_model = {
-            name: ModelRuntimePodStatus(
-                self._pending_reason(pods), self._restarts(pods)
+            pods_by_model.setdefault(name, []).append(pod)
+        return {
+            name: _PodStatus(
+                pending_reason=self._pending_reason(model_pods),
+                restarts=self._restarts(model_pods),
             )
-            for name, pods in pods_by_model.items()
+            for name, model_pods in pods_by_model.items()
         }
-        return pods_info_by_model
 
     async def _get_models_runtime_deployment_statuses(
-        self,
-    ) -> dict[str, ModelRuntimeDeploymentStatus]:
-        """returns dict with model name and status information gathered from k8 deployment api"""
-        api = await self._get_api()
+        self, api: K8sApi
+    ) -> dict[str, _DeploymentStatus]:
+        """Returns a dict mapping model name to deployment status info gathered from the K8s deployment API."""
         try:
             deployments = await api.apps.list_namespaced_deployment(
                 self._ns, label_selector="app.kubernetes.io/managed-by=mlapi-supervisor"
             )
         except Exception as exc:
             raise BackendError(f"kubernetes error: {exc}") from exc
-        deployments_statuses = {}
+        deployments_statuses: dict[str, _DeploymentStatus] = {}
         for deployment in deployments.items:
             label = deployment.metadata.labels or {}
-            kind = label.get("mlapi/role")
             model = label.get("mlapi/model")
-            if model not in deployments_statuses:
-                deployments_statuses[model] = ModelRuntimeDeploymentStatus()
+            if model is None:
+                continue
+            kind = label.get("mlapi/role")
+            status = deployments_statuses.setdefault(model, _DeploymentStatus())
             if kind in ("main", "api"):
-                deployments_statuses[model].replicas = deployment.spec.replicas or 0
-                deployments_statuses[model].ready = self._rolled_out(deployment)
+                status.exists = True
+                status.replicas = deployment.spec.replicas or 0
+                status.ready = self._rolled_out(deployment)
             elif kind == "worker":
-                deployments_statuses[model].worker_replicas = (
-                    deployment.status.ready_replicas or 0
-                )
+                status.worker_replicas = deployment.status.ready_replicas or 0
         return deployments_statuses
