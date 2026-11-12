@@ -1,6 +1,6 @@
 import pytest
 
-from app.cluster.backend import BackendError, ModelSpec
+from app.cluster.backend import BackendError, ModelSpec, Usage
 from app.cluster.docker import DockerBackend, DockerInspector
 from app.config import Settings
 from app.registry.resources import Resources
@@ -20,16 +20,22 @@ def docker_client():
 
 @pytest.fixture
 def backend(docker_client):
-    return DockerBackend(Settings(_env_file=None, docker_network="mlapi-models"), client=docker_client)
+    return DockerBackend(
+        Settings(_env_file=None, docker_network="mlapi-models"), client=docker_client
+    )
 
 
 def spec(**kw):
-    base = dict(name="ecg", image=GHCR_IMAGE, mode="sync", resources=RES, api_resources=API_RES)
+    base = dict(
+        name="ecg", image=GHCR_IMAGE, mode="sync", resources=RES, api_resources=API_RES
+    )
     base.update(kw)
     return ModelSpec(**base)
 
 
-async def test_sync_container_has_limits_labels_network_and_cache_volume(backend, docker_client):
+async def test_sync_container_has_limits_labels_network_and_cache_volume(
+    backend, docker_client
+):
     await backend.apply_model(spec(env={"HF_TOKEN": "t"}))
     c = docker_client.container_map["mlapi-m-ecg"]
     k = c.kwargs
@@ -38,12 +44,16 @@ async def test_sync_container_has_limits_labels_network_and_cache_volume(backend
     assert k["mem_limit"] == 4 * GI and k["memswap_limit"] == 4 * GI
     assert k["network"] == "mlapi-models"
     assert k["volumes"] == {"mlapi-m-ecg-cache": {"bind": "/cache", "mode": "rw"}}
-    assert k["labels"] == {"mlapi.managed": "true", "mlapi.model": "ecg", "mlapi.role": "main"}
+    assert k["labels"] == {
+        "mlapi.managed": "true",
+        "mlapi.model": "ecg",
+        "mlapi.role": "main",
+    }
     assert k["environment"]["HF_TOKEN"] == "t"
     assert k["environment"]["FASTMLAPI_ROLE"] == "sync"
     assert k["environment"]["FASTMLAPI_CACHE_DIR"] == "/cache"
     assert k["environment"]["HF_HOME"] == "/cache/hf"
-    assert "ports" not in k                                       # nothing is published to the host
+    assert "ports" not in k  # nothing is published to the host
     assert docker_client.network_map["mlapi-models"]["driver"] == "bridge"
     assert "mlapi-m-ecg-cache" in docker_client.volume_map
 
@@ -58,13 +68,22 @@ async def test_container_is_hardened(backend, docker_client):
     assert not k.get("privileged")
 
 
-async def test_models_are_told_not_to_return_exception_text_and_cannot_turn_that_back_on(backend, docker_client):
+async def test_models_are_told_not_to_return_exception_text_and_cannot_turn_that_back_on(
+    backend, docker_client
+):
     await backend.apply_model(spec(env={"FASTMLAPI_EXPOSE_ERRORS": "true"}))
-    assert next(iter(docker_client.container_map.values())).kwargs["environment"]["FASTMLAPI_EXPOSE_ERRORS"] == "false"
+    assert (
+        next(iter(docker_client.container_map.values())).kwargs["environment"][
+            "FASTMLAPI_EXPOSE_ERRORS"
+        ]
+        == "false"
+    )
 
 
 async def test_platform_env_cannot_be_overridden_by_model_env(backend, docker_client):
-    await backend.apply_model(spec(env={"FASTMLAPI_ROLE": "worker", "HF_HOME": "/evil"}))
+    await backend.apply_model(
+        spec(env={"FASTMLAPI_ROLE": "worker", "HF_HOME": "/evil"})
+    )
     env = docker_client.container_map["mlapi-m-ecg"].kwargs["environment"]
     assert env["FASTMLAPI_ROLE"] == "sync" and env["HF_HOME"] == "/cache/hf"
 
@@ -84,13 +103,17 @@ async def test_reapply_replaces_the_container(backend, docker_client):
     assert docker_client.container_map["mlapi-m-ecg"].image.endswith("b" * 64)
 
 
-async def test_registry_images_are_pulled_only_when_missing_and_local_ids_never(backend, docker_client):
+async def test_registry_images_are_pulled_only_when_missing_and_local_ids_never(
+    backend, docker_client
+):
     await backend.apply_model(spec())
     assert docker_client.pulled == [GHCR_IMAGE]
     docker_client.pulled.clear()
-    await backend.apply_model(spec())                              # now present locally
+    await backend.apply_model(spec())  # now present locally
     assert docker_client.pulled == []
-    docker_client.local_images["sha256:" + "c" * 64] = FakeImage("local", {}, "sha256:" + "c" * 64)
+    docker_client.local_images["sha256:" + "c" * 64] = FakeImage(
+        "local", {}, "sha256:" + "c" * 64
+    )
     await backend.apply_model(spec(image="sha256:" + "c" * 64))
     assert docker_client.pulled == []
 
@@ -108,16 +131,33 @@ async def test_missing_local_image_is_a_backend_error(backend):
 
 
 async def test_queue_mode_creates_api_and_stopped_worker(backend, docker_client):
-    await backend.apply_model(spec(mode="queue", resources=GPU, queue_url="redis://m_ecg:pw@redis:6379/0", max_job_seconds=900))
-    api, worker = docker_client.container_map["mlapi-m-ecg-api"], docker_client.container_map["mlapi-m-ecg-worker"]
+    await backend.apply_model(
+        spec(
+            mode="queue",
+            resources=GPU,
+            queue_url="redis://m_ecg:pw@redis:6379/0",
+            max_job_seconds=900,
+        )
+    )
+    api, worker = (
+        docker_client.container_map["mlapi-m-ecg-api"],
+        docker_client.container_map["mlapi-m-ecg-worker"],
+    )
     assert api.status == "running" and worker.status == "created"
     assert api.kwargs["environment"]["FASTMLAPI_ROLE"] == "api"
     assert worker.kwargs["environment"]["FASTMLAPI_ROLE"] == "worker"
     for c in (api, worker):
-        assert c.kwargs["environment"]["FASTMLAPI_QUEUE_URL"] == "redis://m_ecg:pw@redis:6379/0"
-    assert api.kwargs["nano_cpus"] == 100_000_000 and not api.kwargs.get("device_requests")
+        assert (
+            c.kwargs["environment"]["FASTMLAPI_QUEUE_URL"]
+            == "redis://m_ecg:pw@redis:6379/0"
+        )
+    assert api.kwargs["nano_cpus"] == 100_000_000 and not api.kwargs.get(
+        "device_requests"
+    )
     assert "volumes" not in api.kwargs or not api.kwargs["volumes"]
-    assert worker.kwargs["nano_cpus"] == 1_500_000_000 and worker.kwargs["device_requests"]
+    assert (
+        worker.kwargs["nano_cpus"] == 1_500_000_000 and worker.kwargs["device_requests"]
+    )
     assert worker.kwargs["labels"]["mlapi.max_job_seconds"] == "900"
     assert await backend.endpoint("ecg") == "http://mlapi-m-ecg-api:8000"
 
@@ -125,7 +165,9 @@ async def test_queue_mode_creates_api_and_stopped_worker(backend, docker_client)
 async def test_reapply_keeps_a_running_worker_running(backend, docker_client):
     await backend.apply_model(spec(mode="queue"))
     await backend.scale("ecg", 1, role="worker")
-    await backend.apply_model(spec(mode="queue", image="ghcr.io/org/ecg@sha256:" + "b" * 64))
+    await backend.apply_model(
+        spec(mode="queue", image="ghcr.io/org/ecg@sha256:" + "b" * 64)
+    )
     assert docker_client.container_map["mlapi-m-ecg-worker"].status == "running"
     assert docker_client.container_map["mlapi-m-ecg-worker"].image.endswith("b" * 64)
 
@@ -139,7 +181,7 @@ async def test_scale_start_stop_and_unknown(backend, docker_client):
     with pytest.raises(BackendError):
         await backend.scale("nope", 1)
     with pytest.raises(BackendError):
-        await backend.scale("ecg", 1, role="worker")               # sync models have no worker
+        await backend.scale("ecg", 1, role="worker")  # sync models have no worker
 
 
 async def test_status_reports_running_restarts_and_queue_roles(backend, docker_client):
@@ -164,21 +206,29 @@ async def test_queue_status_counts_worker_separately(backend, docker_client):
     assert (await backend.status("ecg")).worker_replicas == 1
 
 
-async def test_delete_removes_containers_and_optionally_the_cache(backend, docker_client):
+async def test_delete_removes_containers_and_optionally_the_cache(
+    backend, docker_client
+):
     await backend.apply_model(spec(mode="queue"))
     await backend.delete_model("ecg", keep_cache=True)
-    assert docker_client.container_map == {} and "mlapi-m-ecg-cache" in docker_client.volume_map
+    assert (
+        docker_client.container_map == {}
+        and "mlapi-m-ecg-cache" in docker_client.volume_map
+    )
     await backend.apply_model(spec())
     await backend.delete_model("ecg", keep_cache=False)
     assert "mlapi-m-ecg-cache" not in docker_client.volume_map
-    await backend.delete_model("ecg")                              # deleting twice is fine
+    await backend.delete_model("ecg")  # deleting twice is fine
 
 
 async def test_list_models_uses_labels(backend, docker_client):
     await backend.apply_model(spec(name="a"))
     await backend.apply_model(spec(name="b", mode="queue"))
     from tests.fake_docker import FakeContainer
-    docker_client.container_map["other"] = FakeContainer(docker_client, "other", "x", {"labels": {}})
+
+    docker_client.container_map["other"] = FakeContainer(
+        docker_client, "other", "x", {"labels": {}}
+    )
     assert await backend.list_models() == ["a", "b"]
 
 
@@ -186,7 +236,9 @@ async def test_secret_refs_are_ignored_with_a_warning(backend, docker_client, ca
     with caplog.at_level("WARNING"):
         await backend.apply_model(spec(secret_refs=("hf-token",)))
     assert "secret" in caplog.text.lower()
-    assert "hf-token" not in str(docker_client.container_map["mlapi-m-ecg"].kwargs["environment"])
+    assert "hf-token" not in str(
+        docker_client.container_map["mlapi-m-ecg"].kwargs["environment"]
+    )
 
 
 async def test_endpoints(backend):
@@ -195,9 +247,13 @@ async def test_endpoints(backend):
 
 # ───────────── local image inspection ─────────────
 async def test_inspector_reads_local_image_labels_and_id(docker_client):
-    docker_client.local_images["ecg-local:latest"] = FakeImage("ecg-local:latest", {"mlapi.model": "true"}, "sha256:" + "e" * 64)
+    docker_client.local_images["ecg-local:latest"] = FakeImage(
+        "ecg-local:latest", {"mlapi.model": "true"}, "sha256:" + "e" * 64
+    )
     info = await DockerInspector(docker_client).inspect("ecg-local:latest", "local")
-    assert info.labels == {"mlapi.model": "true"} and info.digest == "sha256:" + "e" * 64
+    assert (
+        info.labels == {"mlapi.model": "true"} and info.digest == "sha256:" + "e" * 64
+    )
     assert info.package_name == "ecg-local"
 
 
@@ -209,40 +265,114 @@ async def test_inspector_unknown_image_and_wrong_source(docker_client):
 
 
 async def test_ports_are_published_on_localhost_only_when_enabled(docker_client):
-    backend = DockerBackend(Settings(_env_file=None, docker_publish_ports=True), client=docker_client)
+    backend = DockerBackend(
+        Settings(_env_file=None, docker_publish_ports=True), client=docker_client
+    )
     await backend.apply_model(spec())
-    assert docker_client.container_map["mlapi-m-ecg"].kwargs["ports"] == {"8000/tcp": ("127.0.0.1", None)}
+    assert docker_client.container_map["mlapi-m-ecg"].kwargs["ports"] == {
+        "8000/tcp": ("127.0.0.1", None)
+    }
     assert await backend.endpoint("ecg") == "http://127.0.0.1:32768"
 
 
 async def test_queue_publishes_only_the_api_port(docker_client):
-    backend = DockerBackend(Settings(_env_file=None, docker_publish_ports=True), client=docker_client)
+    backend = DockerBackend(
+        Settings(_env_file=None, docker_publish_ports=True), client=docker_client
+    )
     await backend.apply_model(spec(mode="queue"))
     assert "ports" in docker_client.container_map["mlapi-m-ecg-api"].kwargs
     assert "ports" not in docker_client.container_map["mlapi-m-ecg-worker"].kwargs
 
 
+async def test_cluster_snapshot(backend, docker_client):
+    await backend.apply_model(spec(name="model-a"))
+    await backend.apply_model(spec(name="model-b", mode="queue"))
+    await backend.scale("model-b", 1, role="worker")
+    await backend.apply_model(spec(name="model-c"))
+    await backend.scale("model-c", 0)
+
+    docker_client.container_map["mlapi-m-model-a"].restart_count = 2
+    docker_client.container_map["mlapi-m-model-a"].stats_result = {
+        "cpu_stats": {
+            "cpu_usage": {"total_usage": 250_000_000},
+            "system_cpu_usage": 1_000_000_000,
+            "online_cpus": 2,
+        },
+        "precpu_stats": {"cpu_usage": {"total_usage": 0}, "system_cpu_usage": 0},
+        "memory_stats": {
+            "usage": 100 * 1024 * 1024,
+            "stats": {"inactive_file": 20 * 1024 * 1024},
+        },
+    }
+
+    snapshots = await backend.cluster_snapshot()
+
+    assert [s.name for s in snapshots] == ["model-a", "model-b", "model-c"]
+    by_name = {s.name: s for s in snapshots}
+
+    assert by_name["model-a"].status.ready is True
+    assert by_name["model-a"].status.restarts == 2
+    assert by_name["model-a"].usage == Usage(cpu_m=500.0, memory_bytes=80 * 1024 * 1024)
+
+    assert by_name["model-b"].status.ready is True
+    assert by_name["model-b"].status.replicas == 1
+    assert by_name["model-b"].status.worker_replicas == 1
+    assert by_name["model-b"].usage is None  # stats_result is None on fake by default
+
+    assert by_name["model-c"].status.exists is True
+    assert by_name["model-c"].status.ready is False
+    assert by_name["model-c"].status.replicas == 0
+    assert by_name["model-c"].usage is None
+
+
 # ───────────── review findings ─────────────
-async def test_workloads_without_a_gpu_cannot_see_the_hosts_gpus(backend, docker_client):
+async def test_workloads_without_a_gpu_cannot_see_the_hosts_gpus(
+    backend, docker_client
+):
     """CUDA base images set NVIDIA_VISIBLE_DEVICES=all, which would hand every GPU to a container that was never approved one."""
     await backend.apply_model(spec(mode="queue"))
     for name in ("mlapi-m-ecg-api", "mlapi-m-ecg-worker"):
-        assert docker_client.container_map[name].kwargs["environment"]["NVIDIA_VISIBLE_DEVICES"] == "void"
+        assert (
+            docker_client.container_map[name].kwargs["environment"][
+                "NVIDIA_VISIBLE_DEVICES"
+            ]
+            == "void"
+        )
     await backend.apply_model(spec(name="plain"))
-    assert docker_client.container_map["mlapi-m-plain"].kwargs["environment"]["NVIDIA_VISIBLE_DEVICES"] == "void"
+    assert (
+        docker_client.container_map["mlapi-m-plain"].kwargs["environment"][
+            "NVIDIA_VISIBLE_DEVICES"
+        ]
+        == "void"
+    )
 
 
 async def test_an_approved_gpu_workload_is_not_blinded(backend, docker_client):
-    await backend.apply_model(spec(resources=GPU, env={"NVIDIA_VISIBLE_DEVICES": "all"}))
+    await backend.apply_model(
+        spec(resources=GPU, env={"NVIDIA_VISIBLE_DEVICES": "all"})
+    )
     env = docker_client.container_map["mlapi-m-ecg"].kwargs["environment"]
-    assert "NVIDIA_VISIBLE_DEVICES" not in env          # the GPU comes from the device request, not from an env override
+    assert (
+        "NVIDIA_VISIBLE_DEVICES" not in env
+    )  # the GPU comes from the device request, not from an env override
 
 
-async def test_a_running_worker_is_stopped_gracefully_before_it_is_replaced(backend, docker_client):
+async def test_a_running_worker_is_stopped_gracefully_before_it_is_replaced(
+    backend, docker_client
+):
     await backend.apply_model(spec(mode="queue", max_job_seconds=900))
     await backend.scale("ecg", 1, role="worker")
-    await backend.apply_model(spec(mode="queue", max_job_seconds=900, image="ghcr.io/org/ecg@sha256:" + "b" * 64))
-    assert ("mlapi-m-ecg-worker", 900) in docker_client.stop_calls      # it gets time to finish its current job
+    await backend.apply_model(
+        spec(
+            mode="queue",
+            max_job_seconds=900,
+            image="ghcr.io/org/ecg@sha256:" + "b" * 64,
+        )
+    )
+    assert (
+        "mlapi-m-ecg-worker",
+        900,
+    ) in docker_client.stop_calls  # it gets time to finish its current job
 
 
 async def test_the_unenforceable_disk_limit_is_logged(backend, caplog):
@@ -251,10 +381,12 @@ async def test_the_unenforceable_disk_limit_is_logged(backend, caplog):
     assert "disk" in caplog.text.lower() and "not enforced" in caplog.text.lower()
 
 
-async def test_stopping_a_worker_gives_it_time_to_finish_its_job(backend, docker_client):
+async def test_stopping_a_worker_gives_it_time_to_finish_its_job(
+    backend, docker_client
+):
     await backend.apply_model(spec(mode="queue", max_job_seconds=900))
     await backend.scale("ecg", 1, role="worker")
     await backend.scale("ecg", 0, role="worker")
     assert ("mlapi-m-ecg-worker", 900) in docker_client.stop_calls
-    await backend.scale("ecg", 0)                                  # the API is stopped quickly
+    await backend.scale("ecg", 0)  # the API is stopped quickly
     assert docker_client.stop_calls[-1] == ("mlapi-m-ecg-api", 10)
